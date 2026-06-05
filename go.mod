@@ -3,7 +3,7 @@ module github.com/brokenbots/criteria-go-adapter-sdk
 go 1.26.3
 
 require (
-	github.com/brokenbots/criteria-adapter-proto v0.5.0
+	github.com/brokenbots/criteria-adapter-proto v0.5.1
 	github.com/hashicorp/go-plugin v1.8.0
 	google.golang.org/grpc v1.81.1
 )
