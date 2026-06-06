@@ -2,12 +2,15 @@ package adapterhost
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"google.golang.org/grpc"
 
@@ -35,11 +38,28 @@ type ServeRemoteOptions struct {
 
 	// AcceptToken is an optional pre-shared token the host may require.
 	AcceptToken string
+
+	// Reconnect, when true, makes ServeRemote redial the host with exponential
+	// backoff after the connection drops, instead of returning. This matches the
+	// TypeScript and Python SDKs' default phone-home behavior. When false (the
+	// default) ServeRemote serves a single connection and returns.
+	Reconnect bool
+
+	// InitialDelay is the first backoff after a dropped connection when
+	// Reconnect is true. Defaults to 1s.
+	InitialDelay time.Duration
+
+	// MaxDelay caps the exponential backoff when Reconnect is true. Defaults
+	// to 30s.
+	MaxDelay time.Duration
 }
 
 // ServeRemote dials the criteria host, sends the v2 identity handshake, and
-// serves the adapter gRPC contract on the held connection. It blocks until the
-// connection closes or a fatal error occurs.
+// serves the adapter gRPC contract on the held connection.
+//
+// By default it blocks until the connection closes or a fatal error occurs.
+// When opts.Reconnect is true it instead redials with exponential backoff and
+// blocks indefinitely (the connection is the workflow's lifeline).
 //
 // This is the remote counterpart to [Serve]; callers should invoke exactly one
 // of Serve or ServeRemote from main().
@@ -51,14 +71,45 @@ func ServeRemote(impl Service, opts *ServeRemoteOptions) error {
 		return errors.New("ServeRemote: Host is required")
 	}
 
+	if !opts.Reconnect {
+		_, err := serveRemoteOnce(impl, opts)
+		return err
+	}
+
+	initial := opts.InitialDelay
+	if initial <= 0 {
+		initial = time.Second
+	}
+	maxDelay := opts.MaxDelay
+	if maxDelay <= 0 {
+		maxDelay = 30 * time.Second
+	}
+
+	delay := initial
+	for {
+		connected, _ := serveRemoteOnce(impl, opts)
+		if connected {
+			delay = initial // reset backoff once a connection was established
+		}
+		time.Sleep(delay)
+		if delay = delay * 2; delay > maxDelay {
+			delay = maxDelay
+		}
+	}
+}
+
+// serveRemoteOnce dials, handshakes, and serves a single connection. It reports
+// whether a connection was successfully established (so the caller can reset
+// backoff) along with any error.
+func serveRemoteOnce(impl Service, opts *ServeRemoteOptions) (connected bool, err error) {
 	conn, err := dialRemote(opts.Host, opts.TLSConfig)
 	if err != nil {
-		return fmt.Errorf("ServeRemote: dial %s: %w", opts.Host, err)
+		return false, fmt.Errorf("ServeRemote: dial %s: %w", opts.Host, err)
 	}
 
 	if err := sendHandshake(conn, opts.Identity, opts.AcceptToken); err != nil {
 		_ = conn.Close()
-		return fmt.Errorf("ServeRemote: handshake: %w", err)
+		return false, fmt.Errorf("ServeRemote: handshake: %w", err)
 	}
 
 	server := grpc.NewServer()
@@ -74,7 +125,31 @@ func ServeRemote(impl Service, opts *ServeRemoteOptions) error {
 		_ = lis.Close()
 	}()
 
-	return server.Serve(lis)
+	return true, server.Serve(lis)
+}
+
+// LoadClientTLS builds a client-side *tls.Config for ServeRemote from PEM file
+// paths: the adapter's client certificate and key, plus the CA bundle that
+// signs the host's server certificate. This is a convenience for the common
+// deployment shape where certs are mounted as files (k8s Secrets, etc.).
+func LoadClientTLS(certPath, keyPath, caPath string) (*tls.Config, error) {
+	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+	if err != nil {
+		return nil, fmt.Errorf("load client key pair: %w", err)
+	}
+	caPEM, err := os.ReadFile(caPath)
+	if err != nil {
+		return nil, fmt.Errorf("read CA bundle: %w", err)
+	}
+	caPool := x509.NewCertPool()
+	if !caPool.AppendCertsFromPEM(caPEM) {
+		return nil, errors.New("parse CA bundle")
+	}
+	return &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		RootCAs:      caPool,
+		MinVersion:   tls.VersionTLS12,
+	}, nil
 }
 
 // dialRemote opens a TCP or Unix connection to the host. TLS is applied only
