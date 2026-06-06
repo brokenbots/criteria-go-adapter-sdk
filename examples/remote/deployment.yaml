@@ -1,0 +1,91 @@
+# Kubernetes deployment for a remote (phone-home) TypeScript adapter.
+# Apply with: kubectl apply -f deployment.yaml
+#
+# The adapter dials out to CRITERIA_REMOTE_HOST; nothing needs to reach *into*
+# this pod. mTLS material is mounted from a Secret; the bearer token and host
+# address come from a Secret/ConfigMap.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: criteria-remote
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: criteria-remote-config
+  namespace: criteria-remote
+data:
+  # host:port of the workflow's `remote` environment listen_address.
+  host: "criteria.example.com:7778"
+  # The adapter artifact digest pinned in the host lockfile.
+  digest: "sha256:REPLACE_WITH_ARTIFACT_DIGEST"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: criteria-remote-secret
+  namespace: criteria-remote
+type: Opaque
+stringData:
+  token: "REPLACE_WITH_ACCEPT_TOKEN"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-adapter
+  namespace: criteria-remote
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: my-adapter
+  template:
+    metadata:
+      labels:
+        app: my-adapter
+    spec:
+      containers:
+        - name: adapter
+          # Built from the adapter repo's published OCI image (D12). The
+          # container entrypoint calls serveRemote() (see Dockerfile).
+          image: ghcr.io/your-org/criteria-adapter-myadapter:v1.0.0
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
+          env:
+            - name: CRITERIA_REMOTE_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: criteria-remote-config
+                  key: host
+            - name: CRITERIA_REMOTE_DIGEST
+              valueFrom:
+                configMapKeyRef:
+                  name: criteria-remote-config
+                  key: digest
+            - name: CRITERIA_REMOTE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: criteria-remote-secret
+                  key: token
+            - name: CRITERIA_REMOTE_TLS_CERT
+              value: "/etc/criteria/certs/tls.crt"
+            - name: CRITERIA_REMOTE_TLS_KEY
+              value: "/etc/criteria/certs/tls.key"
+            - name: CRITERIA_REMOTE_CA
+              value: "/etc/criteria/certs/ca.crt"
+          volumeMounts:
+            - name: certs
+              mountPath: /etc/criteria/certs
+              readOnly: true
+      volumes:
+        - name: certs
+          secret:
+            # Provision via cert-manager or cfssl; must contain
+            # tls.crt, tls.key, and ca.crt.
+            secretName: my-adapter-tls

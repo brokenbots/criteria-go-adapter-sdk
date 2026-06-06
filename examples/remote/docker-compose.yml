@@ -1,0 +1,36 @@
+# Single-host Docker Compose example for a remote (phone-home) adapter.
+# Run with: CRITERIA_REMOTE_TOKEN=secret docker compose up
+#
+# The criteria host runs a workflow that declares a `remote` environment bound
+# to 0.0.0.0:7778; the adapter service dials it over the compose network.
+services:
+  criteria:
+    image: ghcr.io/brokenbots/criteria:latest
+    command: ["apply", "/workspace/workflow.hcl"]
+    ports:
+      - "7778:7778"
+    volumes:
+      - ./workflow.hcl:/workspace/workflow.hcl:ro
+      - ./certs:/etc/criteria/certs:ro
+    environment:
+      - CRITERIA_REMOTE_TOKEN=${CRITERIA_REMOTE_TOKEN:-changeme}
+    healthcheck:
+      test: ["CMD", "criteria", "version"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  adapter:
+    image: ghcr.io/your-org/criteria-adapter-myadapter:v1.0.0
+    depends_on:
+      criteria:
+        condition: service_healthy
+    volumes:
+      - ./certs:/etc/criteria/certs:ro
+    environment:
+      - CRITERIA_REMOTE_HOST=criteria:7778
+      - CRITERIA_REMOTE_TOKEN=${CRITERIA_REMOTE_TOKEN:-changeme}
+      - CRITERIA_REMOTE_DIGEST=${CRITERIA_REMOTE_DIGEST:-sha256:REPLACE}
+      - CRITERIA_REMOTE_TLS_CERT=/etc/criteria/certs/tls.crt
+      - CRITERIA_REMOTE_TLS_KEY=/etc/criteria/certs/tls.key
+      - CRITERIA_REMOTE_CA=/etc/criteria/certs/ca.crt

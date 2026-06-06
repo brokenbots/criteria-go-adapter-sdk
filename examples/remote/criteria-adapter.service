@@ -1,0 +1,38 @@
+# systemd unit for a remote (phone-home) adapter on a VM or bare-metal host.
+#
+# Install:
+#   sudo cp criteria-adapter.service /etc/systemd/system/
+#   sudo cp /path/to/env /etc/criteria/adapter.env   # see EnvironmentFile below
+#   sudo systemctl enable --now criteria-adapter
+#
+# The adapter dials out to the Criteria host and reconnects automatically; the
+# SDK's serveRemote() backoff plus systemd's Restart=always give two layers of
+# resilience.
+[Unit]
+Description=Criteria remote adapter (phone-home)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# A self-contained adapter binary built from this SDK (go build).
+ExecStart=/usr/local/bin/criteria-adapter-myadapter
+EnvironmentFile=/etc/criteria/adapter.env
+# /etc/criteria/adapter.env defines:
+#   CRITERIA_REMOTE_HOST=criteria.example.com:7778
+#   CRITERIA_REMOTE_TOKEN=...
+#   CRITERIA_REMOTE_DIGEST=sha256:...
+#   CRITERIA_REMOTE_TLS_CERT=/etc/criteria/certs/tls.crt
+#   CRITERIA_REMOTE_TLS_KEY=/etc/criteria/certs/tls.key
+#   CRITERIA_REMOTE_CA=/etc/criteria/certs/ca.crt
+Restart=always
+RestartSec=2
+# Hardening (the adapter only needs outbound network + its cert files).
+DynamicUser=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadOnlyPaths=/etc/criteria
+
+[Install]
+WantedBy=multi-user.target
