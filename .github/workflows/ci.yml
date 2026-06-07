@@ -1,12 +1,67 @@
 name: CI
+
 on: [push, pull_request]
+
+permissions:
+  contents: read
+
 jobs:
-  test:
+  build-test:
+    name: Build & test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache: true
       - run: go build ./...
+      - run: go vet ./...
       - run: go test ./...
+
+  # WS49 — vulnerability gate (osv-scanner). BLOCKING (tree clean).
+  osv-scan:
+    name: Vulnerability scan (osv-scanner)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Run osv-scanner (pinned; local parity with `make vuln-scan`)
+        run: make vuln-scan
+
+  # WS50 — non-blocking dependency-freshness report.
+  deps-report:
+    name: Dependency freshness (report-only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Report outdated direct deps
+        run: |
+          {
+            echo '### Outdated direct dependencies'
+            echo '```'
+            make deps-outdated || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  all-checks:
+    name: All checks passed
+    runs-on: ubuntu-latest
+    needs: [build-test, osv-scan]
+    if: always()
+    steps:
+      - name: Verify required jobs succeeded
+        run: |
+          if [ "${{ needs.build-test.result }}" != "success" ]; then
+            echo "build-test did not succeed"; exit 1
+          fi
+          if [ "${{ needs.osv-scan.result }}" != "success" ]; then
+            echo "osv-scan did not succeed"; exit 1
+          fi
