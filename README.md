@@ -78,3 +78,15 @@ against `criteria-adapter-proto`. The criteria **host** still uses its in-tree
 copy; the switchover (host depends on this module + the proto module, in-tree
 `sdk/` deleted) is a tracked follow-up — see RECONCILE.md. Versioned to track the
 criteria release line.
+
+## Security & dependencies
+
+Supply-chain controls and the dependency-freshness policy are documented in
+[SECURITY.md](SECURITY.md) and [docs/dependency-policy.md](docs/dependency-policy.md).
+Reproduce the CI security checks locally:
+
+```bash
+make vuln-scan      # osv-scanner — blocking known-vulnerability gate (WS49)
+make deps-outdated  # go-mod-outdated — freshness report (WS50)
+make deps-majors    # gomajor — available major (/vN) upgrades
+```
