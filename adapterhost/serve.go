@@ -11,6 +11,18 @@ import (
 	v2 "github.com/brokenbots/criteria-adapter-proto/criteria/v2"
 )
 
+// logHeartbeatRunner starts the per-session log-stream heartbeat. It is
+// unexported because it is a test seam: production uses v2.RunHeartbeat with
+// the standard 30s interval, while tests substitute a faster ticker so the
+// regression suite does not wait for real-time heartbeats.
+var logHeartbeatRunner = func(ctx context.Context, sender LogEventSender) {
+	go func() {
+		_ = v2.RunHeartbeat(ctx, "log", func(hb *v2.Heartbeat) error {
+			return sender.Send(&v2.LogEvent{Heartbeat: hb})
+		})
+	}()
+}
+
 // Serve starts the adapter process using the shared [HandshakeConfig].
 // Call this from your adapter's main() function.
 //
@@ -77,24 +89,46 @@ func (s *grpcAdapterServer) Execute(req *v2.ExecuteRequest, stream v2.AdapterSer
 
 // Log adapts the generated server-streaming signature to LogEventSender.
 //
-// It runs a background heartbeat ticker on the Log stream for the lifetime of
-// the adapter's Log call. The host's heartbeat-stall detector is fed solely by
-// the per-session Log stream, and it declares a session crashed after 90s of
-// silence. An idle adapter session (e.g. a reviewer waiting behind a long
-// developer or CI step on another session) emits no log lines on its own, so
-// without these heartbeats it is falsely declared crashed. Sends are serialised
-// by grpcLogEventServer's mutex, so the heartbeat goroutine is safe alongside
-// any log lines the adapter's Log implementation emits.
+// The SDK owns the log stream and its heartbeat for the entire lifetime of the
+// stream context, even if the adapter's Log implementation returns early. The
+// host's heartbeat-stall detector is fed solely by the per-session Log stream,
+// and it declares a session crashed after 90s of silence. An idle adapter
+// session (e.g. a reviewer waiting behind a long developer or CI step on another
+// session) emits no log lines on its own, so without these heartbeats it is
+// falsely declared crashed.
+//
+// If the adapter's Log returns a non-nil error, that error is propagated and
+// the stream ends. A nil return simply means the adapter has nothing further
+// to log; the SDK keeps the stream alive and heartbeats running until the host
+// tears the stream down.
+//
+// Sends are serialised by grpcLogEventServer's mutex, so the heartbeat
+// goroutine is safe alongside any log lines the adapter's Log implementation
+// emits.
 func (s *grpcAdapterServer) Log(req *v2.LogRequest, stream v2.AdapterService_LogServer) error {
 	sender := &grpcLogEventServer{stream: stream}
-	hbCtx, cancel := context.WithCancel(stream.Context())
-	defer cancel()
+
+	// Run the heartbeat on the stream context so it survives an early nil
+	// return from the adapter's Log implementation.
+	logHeartbeatRunner(stream.Context(), sender)
+
+	// Run the adapter's Log implementation concurrently so that an early nil
+	// return does not tear down the heartbeat ticker.
+	errCh := make(chan error, 1)
 	go func() {
-		_ = v2.RunHeartbeat(hbCtx, "log", func(hb *v2.Heartbeat) error {
-			return sender.Send(&v2.LogEvent{Heartbeat: hb})
-		})
+		errCh <- s.impl.Log(stream.Context(), req, sender)
 	}()
-	return s.impl.Log(stream.Context(), req, sender)
+
+	// Propagate real errors immediately.
+	err := <-errCh
+	if err != nil {
+		return err
+	}
+
+	// The adapter has finished logging. Keep the stream (and therefore the
+	// heartbeat) open until the host cancels the stream context.
+	<-stream.Context().Done()
+	return nil
 }
 
 // Permissions adapts the generated bidi-streaming signature to PermissionsStream.
