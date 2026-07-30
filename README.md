@@ -79,6 +79,16 @@ copy; the switchover (host depends on this module + the proto module, in-tree
 `sdk/` deleted) is a tracked follow-up — see RECONCILE.md. Versioned to track the
 criteria release line.
 
+## SDK design principles
+
+Protocol-level liveness and stream lifetime are the SDK's responsibility, not
+the adapter author's. The most obvious implementation of any adapter method must
+never produce an adapter that silently breaks the host. For example, the SDK
+keeps the per-session log stream and its heartbeat running for as long as the
+host holds the stream open, regardless of whether the adapter's `Log` method
+blocks or returns early. This principle applies across all Criteria SDKs (Go,
+TypeScript, Python, and any future ones).
+
 ## Security & dependencies
 
 Supply-chain controls and the dependency-freshness policy are documented in

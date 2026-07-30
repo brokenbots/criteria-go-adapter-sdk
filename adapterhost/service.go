@@ -35,6 +35,11 @@ type Service interface {
 	Execute(context.Context, *v2.ExecuteRequest, ExecuteEventSender) error
 	// Log streams log lines for the step to the host via [LogEventSender].
 	// The host drives this concurrently with [Execute].
+	//
+	// The SDK owns the log stream and its heartbeat for the full lifetime of
+	// the session context, even if this method returns early. An implementation
+	// that has nothing to log may return nil immediately without affecting
+	// liveness. Non-nil errors are still propagated to the host.
 	Log(context.Context, *v2.LogRequest, LogEventSender) error
 	// Permissions is the bidi permission stream. The host sends PermissionEvent
 	// messages; the adapter responds with PermissionDecision messages. Embed
