@@ -3,13 +3,9 @@ package adapterhost
 import (
 	"context"
 	"errors"
-	"net"
 	"strings"
 	"testing"
 	"time"
-
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 
 	v2 "github.com/brokenbots/criteria-adapter-proto/criteria/v2"
 )
@@ -133,30 +129,12 @@ func withFastLogHeartbeat(t *testing.T, interval time.Duration) {
 // the connection.
 func startLogTestServer(t *testing.T, svc Service) v2.AdapterServiceClient {
 	t.Helper()
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	client, stop, err := serveAdapterOnLoopback(svc)
 	if err != nil {
-		t.Fatalf("listen: %v", err)
+		t.Fatalf("serve adapter on loopback: %v", err)
 	}
-
-	s := grpc.NewServer()
-	v2.RegisterAdapterServiceServer(s, &grpcAdapterServer{impl: svc})
-	go func() { _ = s.Serve(lis) }()
-
-	cc, err := grpc.NewClient(
-		lis.Addr().String(),
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
-	if err != nil {
-		t.Fatalf("grpc client: %v", err)
-	}
-
-	t.Cleanup(func() {
-		cc.Close()
-		s.Stop()
-		_ = lis.Close()
-	})
-
-	return v2.NewAdapterServiceClient(cc)
+	t.Cleanup(stop)
+	return client
 }
 
 // TestLogEarlyReturnKeepsHeartbeats verifies that an adapter whose Log returns
