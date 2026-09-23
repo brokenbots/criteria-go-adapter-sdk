@@ -113,7 +113,6 @@ func (s *conformanceReferenceService) Execute(ctx context.Context, req *v2.Execu
 // of a race the test could win by luck.
 type sharedResultStateService struct {
 	conformanceBaseService
-	calls int
 
 	mu          sync.Mutex
 	shared      *v2.ExecuteResult
@@ -123,7 +122,7 @@ type sharedResultStateService struct {
 }
 
 func newSharedResultStateService(calls int) *sharedResultStateService {
-	return &sharedResultStateService{calls: calls, remaining: calls, allComputed: make(chan struct{})}
+	return &sharedResultStateService{remaining: calls, allComputed: make(chan struct{})}
 }
 
 func (s *sharedResultStateService) Execute(ctx context.Context, req *v2.ExecuteRequest, sender ExecuteEventSender) error {

@@ -76,7 +76,7 @@ func WithConcurrentExecuteCallTimeout(d time.Duration) ConcurrentExecuteOption {
 // runs concurrent iterations against one wire session.
 //
 // The case opens ONE session, then drives N concurrent Execute calls over a
-// real gRPC bridge (the same [grpcAdapterServer] path a Criteria host uses)
+// real gRPC bridge (the same grpcAdapterServer path a Criteria host uses)
 // and requires every call's stream to receive exactly its own ExecuteResult:
 // the result is present, exactly once, and equals the result the script
 // expects for that call. Nothing is lost, nothing is delivered to a sibling's
@@ -270,9 +270,6 @@ func joinExecuteResultFragments(fragments []*v2.ExecuteResult) (*v2.ExecuteResul
 
 	var total uint32
 	for i, frag := range sorted {
-		if frag.GetChunk() == nil {
-			return nil, fmt.Errorf("fragment[%d] has no Chunk metadata", i)
-		}
 		if i == 0 {
 			total = frag.GetChunk().GetTotal()
 			if total == 0 {
