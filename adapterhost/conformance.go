@@ -76,7 +76,7 @@ func WithConcurrentExecuteCallTimeout(d time.Duration) ConcurrentExecuteOption {
 // runs concurrent iterations against one wire session.
 //
 // The case opens ONE session, then drives N concurrent Execute calls over a
-// real gRPC bridge (the same grpcAdapterServer path a Criteria host uses)
+// real gRPC bridge (the same serving path a Criteria host uses)
 // and requires every call's stream to receive exactly its own ExecuteResult:
 // the result is present, exactly once, and equals the result the script
 // expects for that call. Nothing is lost, nothing is delivered to a sibling's
@@ -243,8 +243,11 @@ func driveConformanceExecute(ctx context.Context, client v2.AdapterServiceClient
 // joinExecuteResultFragments reduces one stream's ExecuteResult messages to
 // the logical result the host would consume: a single non-chunked message
 // passes through; a chunked delivery is reassembled like the host does —
-// fragments sorted by Chunk.Seq, seqs forming a contiguous run from 0 with a
-// consistent total, and the final flag only on the last fragment.
+// fragments are consumed in strict arrival order (the i-th fragment received
+// must carry Chunk.Seq == i, matching the host's resultChunkNextSeq check,
+// which rejects out-of-order fragments), the totals must agree, the final
+// flag only on the last fragment, and the outcome is read from fragment 0,
+// which the host records at seq 0 and ignores on every later fragment.
 func joinExecuteResultFragments(fragments []*v2.ExecuteResult) (*v2.ExecuteResult, error) {
 	switch {
 	case len(fragments) == 0:
@@ -262,21 +265,19 @@ func joinExecuteResultFragments(fragments []*v2.ExecuteResult) (*v2.ExecuteResul
 		}
 	}
 
-	sorted := make([]*v2.ExecuteResult, len(fragments))
-	copy(sorted, fragments)
-	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].GetChunk().GetSeq() < sorted[j].GetChunk().GetSeq()
-	})
-
+	// The host consumes fragments in strict arrival order: the i-th fragment
+	// received must carry Chunk.Seq == i or emitResult fails the adapter with
+	// "execute result chunk out-of-order". Sorting by seq here would let an
+	// out-of-order sender pass a case the host rejects, so validate directly.
 	var total uint32
-	for i, frag := range sorted {
+	for i, frag := range fragments {
 		if i == 0 {
 			total = frag.GetChunk().GetTotal()
 			if total == 0 {
 				return nil, errors.New("fragment[0] declares total 0")
 			}
-			if total != uint32(len(sorted)) {
-				return nil, fmt.Errorf("result declares total %d chunks but %d were received", total, len(sorted))
+			if total != uint32(len(fragments)) {
+				return nil, fmt.Errorf("result declares total %d chunks but %d were received", total, len(fragments))
 			}
 		} else if frag.GetChunk().GetTotal() != total {
 			return nil, fmt.Errorf("fragment[%d] declares total %d, expected %d", i, frag.GetChunk().GetTotal(), total)
@@ -286,24 +287,30 @@ func joinExecuteResultFragments(fragments []*v2.ExecuteResult) (*v2.ExecuteResul
 		}
 	}
 
-	final := sorted[total-1]
+	final := fragments[total-1]
 	if !final.GetChunk().GetFinal() {
 		return nil, fmt.Errorf("final chunk (seq %d) missing final flag", total-1)
 	}
-	for i, frag := range sorted[:total-1] {
+	for i, frag := range fragments[:total-1] {
 		if frag.GetChunk().GetFinal() {
 			return nil, fmt.Errorf("fragment[%d] (seq %d) sets final flag early", i, frag.GetChunk().GetSeq())
 		}
 	}
 
-	outcome := final.GetOutcome()
-	for i, frag := range sorted[:total-1] {
+	// The host records the outcome from fragment 0 (seq 0) and ignores the
+	// outcome on every later fragment, so read it there: taking it from the
+	// final fragment false-fails adapters that set it only on fragment 0.
+	outcome := fragments[0].GetOutcome()
+	if outcome == "" {
+		return nil, errors.New("fragment[0] outcome is empty")
+	}
+	for i, frag := range fragments[1:] {
 		if out := frag.GetOutcome(); out != "" && out != outcome {
-			return nil, fmt.Errorf("fragment[%d] outcome %q differs from final fragment outcome %q", i, out, outcome)
+			return nil, fmt.Errorf("fragment[%d] outcome %q differs from fragment[0] outcome %q", i+1, out, outcome)
 		}
 	}
 
-	outputs, err := v2.JoinExecuteResultOutputs(sorted)
+	outputs, err := v2.JoinExecuteResultOutputs(fragments)
 	if err != nil {
 		return nil, fmt.Errorf("reassemble outputs: %w", err)
 	}

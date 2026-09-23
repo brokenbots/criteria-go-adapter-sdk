@@ -154,26 +154,98 @@ type silentExecuteService struct {
 	conformanceBaseService
 }
 
-// chunkingReferenceService delivers its result the way the chunking contract
-// allows — as ExecuteResult fragments sent out of Chunk.seq order — and must
-// still pass the case: the host-side reassembly is part of the contract.
-type chunkingReferenceService struct {
+// chunkedInOrderService delivers its result the way a conforming chunking
+// adapter may: as ExecuteResult fragments sent in strict seq order. Fragment 0
+// carries the outcome and later fragments leave it empty by default — the host
+// records the outcome from fragment 0 (seq 0) and ignores it on every later
+// fragment, so both shapes are part of the contract.
+type chunkedInOrderService struct {
 	conformanceBaseService
+	// outcomeOnEveryFragment keeps the outcome on all fragments instead of
+	// only fragment 0 when set.
+	outcomeOnEveryFragment bool
 }
 
-func (chunkingReferenceService) Execute(_ context.Context, req *v2.ExecuteRequest, sender ExecuteEventSender) error {
+func (s chunkedInOrderService) Execute(_ context.Context, req *v2.ExecuteRequest, sender ExecuteEventSender) error {
 	res, err := v2.NewExecuteResult("succeeded", map[string]any{"call_id": req.GetInput()["call_id"]})
 	if err != nil {
 		return err
 	}
 	fragments := v2.ChunkExecuteResultOutputs(res, res.GetOutputsJson(), 8)
-	// Send fragments in reverse seq order; reassembly must sort by Chunk.Seq.
+	if len(fragments) < 2 {
+		return fmt.Errorf("fixture bug: expected a multi-fragment delivery, got %d fragments", len(fragments))
+	}
+	if !s.outcomeOnEveryFragment {
+		for _, frag := range fragments[1:] {
+			frag.Outcome = ""
+		}
+	}
+	for _, frag := range fragments {
+		if err := sender.Send(&v2.ExecuteEvent{Event: &v2.ExecuteEvent_Result{Result: frag}}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// chunkedEmptySeq0OutcomeService is the deliberately-broken chunking variant:
+// its fragment 0 carries no outcome. The host records the outcome from seq 0
+// only, so the outcome is unrecoverable from later fragments and the case
+// must fail it.
+type chunkedEmptySeq0OutcomeService struct {
+	conformanceBaseService
+}
+
+func (chunkedEmptySeq0OutcomeService) Execute(_ context.Context, req *v2.ExecuteRequest, sender ExecuteEventSender) error {
+	fragments, err := chunkedFragments(req)
+	if err != nil {
+		return err
+	}
+	fragments[0].Outcome = ""
+	for _, frag := range fragments {
+		if err := sender.Send(&v2.ExecuteEvent{Event: &v2.ExecuteEvent_Result{Result: frag}}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// chunkedOutOfOrderService is the deliberately-broken chunking variant: it
+// sends its fragments in reverse Chunk.Seq order. A real host rejects this
+// with "execute result chunk out-of-order" the moment fragment 0's seq is not
+// the arrival index, so the case must fail it too.
+type chunkedOutOfOrderService struct {
+	conformanceBaseService
+}
+
+func (chunkedOutOfOrderService) Execute(_ context.Context, req *v2.ExecuteRequest, sender ExecuteEventSender) error {
+	fragments, err := chunkedFragments(req)
+	if err != nil {
+		return err
+	}
 	for i := len(fragments) - 1; i >= 0; i-- {
 		if err := sender.Send(&v2.ExecuteEvent{Event: &v2.ExecuteEvent_Result{Result: fragments[i]}}); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// chunkedFragments computes call req's logical result the way the other
+// fixtures do and splits it into a multi-fragment delivery, so the chunk
+// ordering rules — not output size — are what the case exercises. The guard
+// keeps the chunk-ordering tests meaningful: if the fixture ever degrades to
+// a single fragment they fail loudly instead of passing vacuously.
+func chunkedFragments(req *v2.ExecuteRequest) ([]*v2.ExecuteResult, error) {
+	res, err := v2.NewExecuteResult("succeeded", map[string]any{"call_id": req.GetInput()["call_id"]})
+	if err != nil {
+		return nil, err
+	}
+	fragments := v2.ChunkExecuteResultOutputs(res, res.GetOutputsJson(), 8)
+	if len(fragments) < 2 {
+		return nil, fmt.Errorf("fixture bug: expected a multi-fragment delivery, got %d fragments", len(fragments))
+	}
+	return fragments, nil
 }
 
 // TestConcurrentExecuteConformanceReference runs the case against the
@@ -243,17 +315,61 @@ func TestConcurrentExecuteConformanceDetectsLostResult(t *testing.T) {
 	}
 }
 
-// TestConcurrentExecuteConformanceChunkedOutputs proves the case reads the
-// result contract the way the host does: a chunked delivery sent out of
-// Chunk.seq order is reassembled before comparison, so a conforming
-// chunking implementation passes.
-func TestConcurrentExecuteConformanceChunkedOutputs(t *testing.T) {
+// TestConcurrentExecuteConformanceDetectsOutOfOrderChunkDelivery proves the
+// case rejects a chunked delivery whose fragments arrive out of Chunk.Seq
+// order: a real host fails such an adapter with "execute result chunk
+// out-of-order" the moment a fragment's seq is not the arrival index, so the
+// case must fail it too — sorting fragments by seq would hide the defect.
+func TestConcurrentExecuteConformanceDetectsOutOfOrderChunkDelivery(t *testing.T) {
 	const n = 3
 	delays := make([]time.Duration, n)
-	err := RunConcurrentExecuteConformance(chunkingReferenceService{}, conformanceScript(delays), WithConcurrentExecuteCalls(n))
-	if err != nil {
-		t.Fatalf("chunking implementation failed the concurrent-execute case: %v", err)
+	err := RunConcurrentExecuteConformance(chunkedOutOfOrderService{}, conformanceScript(delays), WithConcurrentExecuteCalls(n))
+	if err == nil {
+		t.Fatal("out-of-order chunk sender passed the concurrent-execute case; the case failed to detect the defect")
 	}
+	if !strings.Contains(err.Error(), "chunk seq gap: got seq 2, expected 0") {
+		t.Errorf("failure does not report the out-of-order fragment against arrival order:\n%s", err)
+	}
+}
+
+// TestConcurrentExecuteConformanceDetectsMissingSeq0Outcome proves the case
+// rejects a chunked delivery whose fragment 0 carries no outcome: the host
+// records the outcome from seq 0 only, so it is unrecoverable from later
+// fragments and the case must fail it.
+func TestConcurrentExecuteConformanceDetectsMissingSeq0Outcome(t *testing.T) {
+	const n = 3
+	delays := make([]time.Duration, n)
+	err := RunConcurrentExecuteConformance(chunkedEmptySeq0OutcomeService{}, conformanceScript(delays), WithConcurrentExecuteCalls(n))
+	if err == nil {
+		t.Fatal("chunk sender with empty fragment-0 outcome passed the concurrent-execute case; the case failed to detect the defect")
+	}
+	if !strings.Contains(err.Error(), "fragment[0] outcome is empty") {
+		t.Errorf("failure does not report the missing fragment-0 outcome:\n%s", err)
+	}
+}
+
+// TestConcurrentExecuteConformanceChunkedOutputs proves the case reads the
+// result contract the way the host does: a chunked delivery sent in seq order
+// reassembles before comparison, and the outcome comes from fragment 0 — the
+// host ignores the outcome on every later fragment, so an adapter that sets
+// it only on fragment 0 still passes.
+func TestConcurrentExecuteConformanceChunkedOutputs(t *testing.T) {
+	t.Run("outcome_on_fragment_0_only", func(t *testing.T) {
+		const n = 3
+		delays := make([]time.Duration, n)
+		err := RunConcurrentExecuteConformance(chunkedInOrderService{}, conformanceScript(delays), WithConcurrentExecuteCalls(n))
+		if err != nil {
+			t.Fatalf("chunking implementation failed the concurrent-execute case: %v", err)
+		}
+	})
+	t.Run("outcome_on_every_fragment", func(t *testing.T) {
+		const n = 3
+		delays := make([]time.Duration, n)
+		err := RunConcurrentExecuteConformance(chunkedInOrderService{outcomeOnEveryFragment: true}, conformanceScript(delays), WithConcurrentExecuteCalls(n))
+		if err != nil {
+			t.Fatalf("chunking implementation failed the concurrent-execute case: %v", err)
+		}
+	})
 }
 
 // TestRunConcurrentExecuteConformanceValidation covers the runner's input
