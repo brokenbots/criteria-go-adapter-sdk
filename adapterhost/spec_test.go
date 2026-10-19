@@ -105,7 +105,7 @@ func TestDeriveInfoFullSpec(t *testing.T) {
 	}
 	mode, ok := info.ConfigSchema.Fields["mode"]
 	if !ok || mode.Type != SchemaTypeString || !mode.Required || mode.Description != "greeter mode" || mode.DefaultStr != "" || mode.Sensitive {
-		t.Errorf("ConfigSchema[major] = %+v", mode)
+		t.Errorf("ConfigSchema[mode] = %+v", mode)
 	}
 	threshold := info.ConfigSchema.Fields["threshold"]
 	if threshold == nil || threshold.Type != SchemaTypeNumber || threshold.Required || threshold.DefaultStr != "3" || !threshold.Sensitive {

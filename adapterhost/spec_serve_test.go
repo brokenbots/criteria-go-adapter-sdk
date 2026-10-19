@@ -561,3 +561,60 @@ func TestTier2ServiceWithoutVerbs(t *testing.T) {
 		}
 	}
 }
+
+// tier2VerbFixture is a tier-2 Service that opts into the lifecycle verbs
+// through [OptionalVerbs] — the bridge must route them without any spec.
+type tier2VerbFixture struct {
+	logFixtureService
+	paused map[string]bool
+}
+
+func (f *tier2VerbFixture) Pause(ctx context.Context, req *v2.PauseRequest) (*v2.PauseResponse, error) {
+	f.paused[req.GetSessionId()] = true
+	return &v2.PauseResponse{}, nil
+}
+
+func (f *tier2VerbFixture) Resume(ctx context.Context, req *v2.ResumeRequest) (*v2.ResumeResponse, error) {
+	return nil, errors.New("resume declined")
+}
+
+func (f *tier2VerbFixture) Snapshot(ctx context.Context, req *v2.SnapshotRequest) (*v2.SnapshotResponse, error) {
+	return nil, unimplementedVerb("Snapshot")
+}
+
+func (f *tier2VerbFixture) Restore(ctx context.Context, req *v2.RestoreRequest) (*v2.RestoreResponse, error) {
+	return nil, unimplementedVerb("Restore")
+}
+
+func (f *tier2VerbFixture) Inspect(ctx context.Context, req *v2.InspectRequest) (*v2.InspectResponse, error) {
+	return inspectResponseFromInfo(InspectInfo{CurrentStep: "greet", PendingPermissions: 7})
+}
+
+// TestTier2ServiceWithVerbs pins the tier-2 opt-in contract: a Service also
+// implementing OptionalVerbs gets its lifecycle verbs routed by the bridge —
+// wired verbs work, handler errors surface, and verbs the impl itself leaves
+// at unimplementedVerb stay deterministic.
+func TestTier2ServiceWithVerbs(t *testing.T) {
+	fixture := &tier2VerbFixture{paused: map[string]bool{}}
+	client, stop, err := serveAdapterOnLoopback(fixture)
+	if err != nil {
+		t.Fatalf("serveAdapterOnLoopback: %v", err)
+	}
+	defer stop()
+	ctx := context.Background()
+	if _, err := client.Pause(ctx, &v2.PauseRequest{SessionId: "t2"}); err != nil {
+		t.Errorf("Pause: %v", err)
+	}
+	if !fixture.paused["t2"] {
+		t.Error("tier-2 Pause handler never received the request")
+	}
+	if _, err := client.Resume(ctx, &v2.ResumeRequest{}); status.Code(err) != codes.Unknown || !strings.Contains(err.Error(), "resume declined") {
+		t.Errorf("Resume error = %v; want handler message", err)
+	}
+	if _, err := client.Snapshot(ctx, &v2.SnapshotRequest{}); status.Code(err) != codes.Unimplemented {
+		t.Errorf("Snapshot code = %s; want the impl's own Unimplemented", status.Code(err))
+	}
+	if insp, err := client.Inspect(ctx, &v2.InspectRequest{}); err != nil || insp.PendingPermissionCount != 7 {
+		t.Errorf("Inspect = %+v, err %v", insp, err)
+	}
+}
