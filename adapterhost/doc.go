@@ -9,11 +9,12 @@
 // A [Spec] describes the adapter completely: metadata, capabilities,
 // platforms, plain-object schemas ([Schema] assembled from [Field]), secrets,
 // permissions, compatible environments, container image, examples, and handler
-// funcs for the wire verbs. [ServeSpec] runs it as a spawn-served adapter;
-// [ServeSpecRemote] phones home with it. Everything on the wire — including
-// the Info response with its embedded schemas and examples — is derived from
-// the spec: author code never constructs or touches wire schema types, the
-// spec surface is a plain-object vocabulary (ADR-0011 D2/D3).
+// funcs for the wire verbs. [ServeSpec] serves the adapter binary over the
+// go-plugin handshake; [ServeSpecRemote] phones home with it. Everything on
+// the wire — including the Info response with its embedded schemas and
+// examples — is derived from the spec: author code never constructs or
+// touches wire schema types, the spec surface is a plain-object vocabulary
+// (ADR-0011 D2/D3).
 //
 //	package main
 //
