@@ -446,8 +446,12 @@ const wireProtocolVersion = "2"
 // adapterSchemaProto maps a plain-object [Schema] onto the wire's keyed
 // schema form. This is the only place the SDK builds a proto schema object
 // from a [Spec] — at the Info boundary, per D2. Duplicate names cannot occur
-// here ([Spec.validate] rejects them loudly).
+// here ([Spec.validate] rejects them loudly). An empty schema leaves the
+// Info field unset, matching a tier-2 author who simply omits it.
 func adapterSchemaProto(schema Schema) *v2.AdapterSchemaProto {
+	if len(schema) == 0 {
+		return nil
+	}
 	fields := make(map[string]*v2.ConfigFieldProto, len(schema))
 	for _, f := range schema {
 		fields[f.Name] = &v2.ConfigFieldProto{
