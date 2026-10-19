@@ -548,6 +548,15 @@ func (s *specService) Execute(ctx context.Context, req *v2.ExecuteRequest, sende
 		return fmt.Errorf("adapterhost: step %q outputs: %w", in.StepName, err)
 	}
 	base := &v2.ExecuteResult{Outcome: res.Outcome, Comment: res.Comment}
+	if !v2.NeedsChunking(outputsJSON, chunkSize) {
+		// Small result: one unchunked message (no framing), like a tier-2
+		// author would emit.
+		base.OutputsJson = outputsJSON
+		if err := sender.Send(&v2.ExecuteEvent{Event: &v2.ExecuteEvent_Result{Result: base}}); err != nil {
+			return fmt.Errorf("adapterhost: step %q: send result: %w", in.StepName, err)
+		}
+		return nil
+	}
 	for _, frag := range v2.ChunkExecuteResultOutputs(base, outputsJSON, chunkSize) {
 		if err := sender.Send(&v2.ExecuteEvent{Event: &v2.ExecuteEvent_Result{Result: frag}}); err != nil {
 			return fmt.Errorf("adapterhost: step %q: send result: %w", in.StepName, err)
