@@ -84,7 +84,13 @@ type PermissionsStream interface {
 // themselves (see cmd/criteria-adapter-copilot for a blocking example).
 type UnimplementedPermissions struct{}
 
-func (UnimplementedPermissions) Permissions(_ context.Context, stream PermissionsStream) error {
+func (UnimplementedPermissions) Permissions(ctx context.Context, stream PermissionsStream) error {
+	return runUnimplementedPermissions(ctx, stream)
+}
+
+// runUnimplementedPermissions is the permissionless default both the embedded
+// [UnimplementedPermissions] helper and a [Spec]-served adapter fall back to.
+func runUnimplementedPermissions(_ context.Context, stream PermissionsStream) error {
 	for {
 		ev, err := stream.Recv()
 		if err != nil {

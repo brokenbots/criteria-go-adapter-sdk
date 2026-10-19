@@ -347,7 +347,7 @@ func serveAdapterOnLoopback(svc Service) (v2.AdapterServiceClient, func(), error
 	}
 
 	s := grpc.NewServer()
-	v2.RegisterAdapterServiceServer(s, &grpcAdapterServer{impl: svc})
+	v2.RegisterAdapterServiceServer(s, &grpcAdapterServer{impl: svc, verbs: optionalVerbsOf(svc)})
 	go func() { _ = s.Serve(lis) }()
 
 	cc, err := grpc.NewClient(
