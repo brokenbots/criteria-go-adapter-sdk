@@ -7,10 +7,11 @@
 // rules) so emit tests can prove emitted manifests are publishable.
 //
 // The strictness is deliberately forward-looking, not mirrored from main:
-// unknown-field rejection and the strict parse coupling are the behaviour
-// KB-180d adds to the host parser, adopted here ahead of that card; the
-// structural parsing and validation rules reflect main's current behaviour.
-// The KB-180d fixture set may replace or extend this package once it lands.
+// unknown-field rejection and coupling the Validate rules into Parse are the
+// behaviour KB-180d adds to the host parser, adopted here ahead of that card;
+// the structural validation rules themselves reflect main's current
+// behaviour. The KB-180d fixture set may replace or extend this package once
+// it lands.
 package strictmanifest
 
 import (
