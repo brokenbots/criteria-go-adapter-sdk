@@ -727,7 +727,12 @@ func ServeSpec(spec *Spec) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	if runEmitManifestIfRequested(svc) {
+	// D3: the emitted manifest is fed from deriveInfo(spec) — the same
+	// single source the Info RPC serves — so spec-object authors never
+	// implement Info to be publishable.
+	if runEmitManifestIfRequested(func(context.Context) (*v2.InfoResponse, error) {
+		return deriveInfo(spec)
+	}) {
 		return
 	}
 	Serve(svc)

@@ -29,17 +29,12 @@ func emitManifestRequested(args []string) bool {
 	return false
 }
 
-// emitManifest writes the adapter's static manifest (adapter.yaml) to w by
-// calling the adapter's own Info RPC and mapping the response into the schema
-// the host's manifest parser consumes. Output is JSON, which is valid YAML, so
-// it parses identically — this avoids a YAML dependency in the sdk module.
-func emitManifest(ctx context.Context, impl Service, w io.Writer) error {
-	if impl == nil {
-		return fmt.Errorf("adapterhost: nil adapter implementation")
-	}
-	info, err := impl.Info(ctx, &v2.InfoRequest{})
-	if err != nil {
-		return fmt.Errorf("adapterhost: Info for --emit-manifest: %w", err)
+// emitManifest writes the adapter's static manifest (adapter.yaml) to w from
+// the derived Info response. Output is JSON, which is valid YAML, so it
+// parses identically — this avoids a YAML dependency in the sdk module.
+func emitManifest(info *v2.InfoResponse, w io.Writer) error {
+	if info == nil {
+		return fmt.Errorf("adapterhost: --emit-manifest: no Info response to derive the manifest from")
 	}
 	doc := buildManifestDoc(info)
 	enc := json.NewEncoder(w)
@@ -180,12 +175,20 @@ func nonNil(s []string) []string {
 }
 
 // runEmitManifestIfRequested handles the --emit-manifest flag at process start.
+// obtain sources the derived InfoResponse the manifest is fed from: the
+// Service tier answers its own Info RPC, while the spec tier feeds
+// deriveInfo(spec) (ADR-0011 D3) so spec-object authors never implement Info.
 // Returns true if the flag was handled (caller should exit).
-func runEmitManifestIfRequested(impl Service) bool {
+func runEmitManifestIfRequested(obtain func(context.Context) (*v2.InfoResponse, error)) bool {
 	if !emitManifestRequested(os.Args[1:]) {
 		return false
 	}
-	if err := emitManifest(context.Background(), impl, os.Stdout); err != nil {
+	info, err := obtain(context.Background())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if err := emitManifest(info, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

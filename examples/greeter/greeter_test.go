@@ -167,7 +167,12 @@ func TestGreeterEmitManifest(t *testing.T) {
 		SchemaVersion int    `json:"schema_version"`
 		Name          string `json:"name"`
 		Version       string `json:"version"`
-		InputSchema   struct {
+		SourceURL     string `json:"source_url"`
+		Platforms     []struct {
+			OS   string `json:"os"`
+			Arch string `json:"arch"`
+		} `json:"platforms"`
+		InputSchema struct {
 			Fields map[string]struct {
 				Type string `json:"type"`
 			} `json:"fields"`
@@ -178,6 +183,9 @@ func TestGreeterEmitManifest(t *testing.T) {
 	}
 	if doc.SchemaVersion != 1 || doc.Name != "greeter" || doc.Version != "0.1.0" {
 		t.Errorf("manifest header = %+v, want version 1 / greeter / 0.1.0", doc)
+	}
+	if doc.SourceURL == "" || len(doc.Platforms) == 0 {
+		t.Errorf("publish-critical metadata missing: source_url=%q platforms=%+v", doc.SourceURL, doc.Platforms)
 	}
 	if doc.InputSchema.Fields["name"].Type != "string" {
 		t.Errorf("manifest input_schema[name].Type = %q, want string", doc.InputSchema.Fields["name"].Type)
