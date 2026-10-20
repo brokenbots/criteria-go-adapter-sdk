@@ -113,7 +113,7 @@ func serveRemoteOnce(impl Service, opts *ServeRemoteOptions) (connected bool, er
 	}
 
 	server := grpc.NewServer()
-	v2.RegisterAdapterServiceServer(server, &grpcAdapterServer{impl: impl})
+	v2.RegisterAdapterServiceServer(server, &grpcAdapterServer{impl: impl, verbs: optionalVerbsOf(impl)})
 
 	wrapped := &closeSignalConn{Conn: conn, doneCh: make(chan struct{})}
 	lis := newSingleConnListener(wrapped)

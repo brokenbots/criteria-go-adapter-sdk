@@ -54,7 +54,7 @@ func (p *grpcAdapter) GRPCServer(_ *hplugin.GRPCBroker, s *grpc.Server) error {
 	if p.Impl == nil {
 		return errors.New("adapter implementation is nil")
 	}
-	v2.RegisterAdapterServiceServer(s, &grpcAdapterServer{impl: p.Impl})
+	v2.RegisterAdapterServiceServer(s, &grpcAdapterServer{impl: p.Impl, verbs: optionalVerbsOf(p.Impl)})
 	return nil
 }
 
@@ -66,12 +66,15 @@ func (p *grpcAdapter) GRPCClient(_ context.Context, _ *hplugin.GRPCBroker, _ *gr
 
 // grpcAdapterServer bridges the generated AdapterServiceServer interface to Service.
 // Only the RPCs in Service (Info, OpenSession, Execute, Log, Permissions,
-// CloseSession) are explicitly bridged; lifecycle RPCs (Pause, Resume,
-// Snapshot, Restore, Inspect) fall back to the generated Unimplemented stubs
-// via the embedded v2.UnimplementedAdapterServiceServer.
+// CloseSession) are explicitly bridged. Lifecycle RPCs (Pause, Resume,
+// Snapshot, Restore, Inspect) route to an implementation that opts in via
+// [OptionalVerbs] — the spec tier always, a tier-2 Service by choice — and
+// stay on the generated Unimplemented stubs (byte-identical error) when none
+// is wired.
 type grpcAdapterServer struct {
 	v2.UnimplementedAdapterServiceServer
-	impl Service
+	impl  Service
+	verbs OptionalVerbs
 }
 
 func (s *grpcAdapterServer) Info(ctx context.Context, req *v2.InfoRequest) (*v2.InfoResponse, error) {
@@ -138,6 +141,44 @@ func (s *grpcAdapterServer) Permissions(stream v2.AdapterService_PermissionsServ
 
 func (s *grpcAdapterServer) CloseSession(ctx context.Context, req *v2.CloseSessionRequest) (*v2.CloseSessionResponse, error) {
 	return s.impl.CloseSession(ctx, req)
+}
+
+// The five lifecycle verbs route to the implementation's [OptionalVerbs]
+// surface when one is wired; without one they keep the generated default's
+// deterministic Unimplemented error (same code, same message).
+func (s *grpcAdapterServer) Pause(ctx context.Context, req *v2.PauseRequest) (*v2.PauseResponse, error) {
+	if s.verbs == nil {
+		return nil, unimplementedVerb("Pause")
+	}
+	return s.verbs.Pause(ctx, req)
+}
+
+func (s *grpcAdapterServer) Resume(ctx context.Context, req *v2.ResumeRequest) (*v2.ResumeResponse, error) {
+	if s.verbs == nil {
+		return nil, unimplementedVerb("Resume")
+	}
+	return s.verbs.Resume(ctx, req)
+}
+
+func (s *grpcAdapterServer) Snapshot(ctx context.Context, req *v2.SnapshotRequest) (*v2.SnapshotResponse, error) {
+	if s.verbs == nil {
+		return nil, unimplementedVerb("Snapshot")
+	}
+	return s.verbs.Snapshot(ctx, req)
+}
+
+func (s *grpcAdapterServer) Restore(ctx context.Context, req *v2.RestoreRequest) (*v2.RestoreResponse, error) {
+	if s.verbs == nil {
+		return nil, unimplementedVerb("Restore")
+	}
+	return s.verbs.Restore(ctx, req)
+}
+
+func (s *grpcAdapterServer) Inspect(ctx context.Context, req *v2.InspectRequest) (*v2.InspectResponse, error) {
+	if s.verbs == nil {
+		return nil, unimplementedVerb("Inspect")
+	}
+	return s.verbs.Inspect(ctx, req)
 }
 
 // grpcExecuteEventServer wraps AdapterService_ExecuteServer to satisfy ExecuteEventSender.

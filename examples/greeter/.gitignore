@@ -1,0 +1,3 @@
+# Build artifacts from `go build -o bin/criteria-adapter-greeter .` (README).
+/bin/
+/criteria-adapter-greeter
