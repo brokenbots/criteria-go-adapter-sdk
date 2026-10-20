@@ -627,13 +627,17 @@ func driveProfileHeartbeatWindow(client v2.AdapterServiceClient, interval, windo
 	if n := window / (6 * interval); len(beats) < int(n) {
 		return fmt.Errorf("%d log heartbeats in %s at interval %s; want at least %d — the stream must stay alive for its full lifetime", len(beats), window, interval, n)
 	}
-	// The beats must span the window: a runner that bursts the minimum count
-	// promptly and then dies mid-window passes every budget above, but its
-	// session goes silent from there on and the host's stall detector takes
-	// over. Require the last beat to sit within one gap budget of the window
-	// end (at window end the next tick is still allowed to be pending).
-	if span := beats[len(beats)-1].Sub(beats[0]); span < window-6*interval {
-		return fmt.Errorf("final log heartbeat spanned only %v of the %s window; want at least %v (last beat %v before stream end) — the stream must stay alive for its full lifetime", span, window, window-6*interval, time.Since(beats[len(beats)-1]))
+	// The beats must reach the end of the window: a runner that bursts the
+	// minimum count promptly and then dies mid-window passes every budget
+	// above, but its session goes silent from there on and the host's stall
+	// detector takes over. Require a beat within one gap budget of the
+	// window end (at window end the next tick is still allowed to be
+	// pending). Trailing silence — not span — is the property to test: the
+	// case's prompt budget explicitly tolerates an 8× first-beat delay, and
+	// coupling the assertion to the first beat couples it to startup jitter
+	// the budgets are designed to absorb.
+	if silence := streamStart.Add(window).Sub(beats[len(beats)-1]); silence > 6*interval {
+		return fmt.Errorf("no log heartbeat in the final %v of the %s window; cadence budget is %v — the stream must stay alive for its full lifetime", silence, window, 6*interval)
 	}
 	return nil
 }
