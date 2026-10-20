@@ -80,6 +80,6 @@ bug id and a review date.
 
 | Dependency | Held at | Reason (advisory / bug) | Review by |
 | --- | --- | --- | --- |
-| _none_ | | | |
+| github.com/brokenbots/criteria-adapter-proto | v0.7.1-0.20261019051615-3a3aa0c1cb85 | KB-176: pins the wire content commit 3a3aa0c1 (adds the `examples` surface, 19-field Info) ahead of the upstream tag — v0.9.0 content is not yet published; the latest published tag (v0.8.0) lacks the surface the SDK builds on. Pseudo-version is deliberate: it locks a specific commit, not a moving branch. | 2026-11-20 |
 
 On the review date the exception must be cleared or re-justified.

@@ -23,6 +23,12 @@ updates:
         update-types:
           - minor
           - patch
+    # Documented dated exception (docs/dependency-policy.md, KB-176): held at
+    # the KB-176 wire-content pseudo-version v0.7.1-0.20261019051615-3a3aa0c1cb85
+    # (v0.9.0 content, tag not yet published upstream). Ignore until that
+    # exception is cleared or re-justified.
+    ignore:
+      - dependency-name: github.com/brokenbots/criteria-adapter-proto
 
   - package-ecosystem: github-actions
     directory: /

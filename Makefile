@@ -15,7 +15,7 @@ OSV_SCANNER_VERSION     := v2.3.8
 GO_MOD_OUTDATED_VERSION := v0.9.0
 GOMAJOR_VERSION         := v0.15.0
 
-.PHONY: help build test vet tidy lint vuln-scan deps-outdated deps-majors
+.PHONY: help build test conformance vet tidy lint vuln-scan deps-outdated deps-majors
 
 help: ## List targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -26,6 +26,9 @@ build: ## Build the adapter
 
 test: ## Run tests
 	$(GO) test ./...
+
+conformance: ## Run the adapter.core conformance profile (KB-181); required green on every PR
+	$(GO) test ./adapterhost -run 'TestProfileAdapterCore|TestProfileMutationChecks' -count=1 -timeout 300s
 
 vet: ## go vet
 	$(GO) vet ./...

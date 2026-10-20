@@ -15,12 +15,36 @@ import (
 // unexported because it is a test seam: production uses v2.RunHeartbeat with
 // the standard 30s interval, while tests substitute a faster ticker so the
 // regression suite does not wait for real-time heartbeats.
-var logHeartbeatRunner = func(ctx context.Context, sender LogEventSender) {
-	go func() {
-		_ = v2.RunHeartbeat(ctx, "log", func(hb *v2.Heartbeat) error {
-			return sender.Send(&v2.LogEvent{Heartbeat: hb})
-		})
-	}()
+//
+// Log streams run on gRPC handler goroutines that read the runner
+// concurrently with tests swapping and restoring it, so all access goes
+// through the mutex-guarded pair below.
+var (
+	logHeartbeatRunnerMu sync.RWMutex
+	logHeartbeatRunner   = func(ctx context.Context, sender LogEventSender) {
+		go func() {
+			_ = v2.RunHeartbeat(ctx, "log", func(hb *v2.Heartbeat) error {
+				return sender.Send(&v2.LogEvent{Heartbeat: hb})
+			})
+		}()
+	}
+)
+
+// currentLogHeartbeatRunner returns the active heartbeat runner.
+func currentLogHeartbeatRunner() func(ctx context.Context, sender LogEventSender) {
+	logHeartbeatRunnerMu.RLock()
+	defer logHeartbeatRunnerMu.RUnlock()
+	return logHeartbeatRunner
+}
+
+// setLogHeartbeatRunner swaps the heartbeat runner (the test seam) and
+// returns the previous runner for restore.
+func setLogHeartbeatRunner(r func(ctx context.Context, sender LogEventSender)) func(ctx context.Context, sender LogEventSender) {
+	logHeartbeatRunnerMu.Lock()
+	defer logHeartbeatRunnerMu.Unlock()
+	prev := logHeartbeatRunner
+	logHeartbeatRunner = r
+	return prev
 }
 
 // Serve starts the adapter process using the shared [HandshakeConfig].
@@ -115,7 +139,7 @@ func (s *grpcAdapterServer) Log(req *v2.LogRequest, stream v2.AdapterService_Log
 
 	// Run the heartbeat on the stream context so it survives an early nil
 	// return from the adapter's Log implementation.
-	logHeartbeatRunner(stream.Context(), sender)
+	currentLogHeartbeatRunner()(stream.Context(), sender)
 
 	// Run the adapter's Log implementation concurrently so that an early nil
 	// return does not tear down the heartbeat ticker.
