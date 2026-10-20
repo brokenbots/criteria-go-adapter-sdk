@@ -523,10 +523,14 @@ func TestProfileAdapterCore(t *testing.T) {
 
 // TestProfileMutationChecks is the documented suite mutation check: break a
 // host-facing behavior the profile guards and prove the suite fails. There is
-// one mutation check, documented once, in docs/conformance-adapter-core.md —
-// the log-stream heartbeat cadence. If the SDK's heartbeat runner goes silent
-// (cadence broken → the host's 90s stall detector unfed; idle sessions falsely
-// declared crashed), driveProfileHeartbeatWindow must fail the profile.
+// one case mutated two ways, documented once, in
+// docs/conformance-adapter-core.md — the log-stream heartbeat cadence. If the
+// SDK's heartbeat runner goes silent (cadence broken → the host's 90s stall
+// detector unfed; idle sessions falsely declared crashed),
+// driveProfileHeartbeatWindow must fail the profile — whether it never beats
+// (log_heartbeat_cadence_stopped_fails_suite) or bursts the minimum count and
+// then stops halfway through the window
+// (log_heartbeat_cadence_partial_then_silent_fails_suite).
 func TestProfileMutationChecks(t *testing.T) {
 	t.Run("log_heartbeat_cadence_stopped_fails_suite", func(t *testing.T) {
 		// The mutation: the heartbeat runner never sends (cadence broken).
@@ -538,6 +542,22 @@ func TestProfileMutationChecks(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "no log heartbeats") {
 			t.Fatalf("mutation failure = %v; want the no-heartbeats reason", err)
+		}
+	})
+	t.Run("log_heartbeat_cadence_partial_then_silent_fails_suite", func(t *testing.T) {
+		// The second mutation form: the runner bursts the minimum cadence
+		// count promptly and then stops emitting for the rest of the window.
+		// Prompt, gap, and count budgets all still pass against such a run,
+		// so only the end-of-window span assertion detects an adapter that
+		// dies mid-window — the form a half-torn-down adapter process takes.
+		withPartialThenSilentLogHeartbeat(t, 20*time.Millisecond, 10*20*time.Millisecond)
+		client := profileLoopbackSpec(t, profileReferenceSpec())
+		err := driveProfileHeartbeatWindow(client, 20*time.Millisecond, 10*20*time.Millisecond)
+		if err == nil {
+			t.Fatal("mutation not detected: a heartbeat runner that burst its beats and went silent mid-window passed the heartbeat case; the profile fails to catch a dead-heartbeat regression")
+		}
+		if !strings.Contains(err.Error(), "full lifetime") {
+			t.Fatalf("mutation failure = %v; want the span/full-lifetime reason", err)
 		}
 	})
 }
@@ -607,6 +627,14 @@ func driveProfileHeartbeatWindow(client v2.AdapterServiceClient, interval, windo
 	if n := window / (6 * interval); len(beats) < int(n) {
 		return fmt.Errorf("%d log heartbeats in %s at interval %s; want at least %d — the stream must stay alive for its full lifetime", len(beats), window, interval, n)
 	}
+	// The beats must span the window: a runner that bursts the minimum count
+	// promptly and then dies mid-window passes every budget above, but its
+	// session goes silent from there on and the host's stall detector takes
+	// over. Require the last beat to sit within one gap budget of the window
+	// end (at window end the next tick is still allowed to be pending).
+	if span := beats[len(beats)-1].Sub(beats[0]); span < window-6*interval {
+		return fmt.Errorf("final log heartbeat spanned only %v of the %s window; want at least %v (last beat %v before stream end) — the stream must stay alive for its full lifetime", span, window, window-6*interval, time.Since(beats[len(beats)-1]))
+	}
 	return nil
 }
 
@@ -615,6 +643,32 @@ func driveProfileHeartbeatWindow(client v2.AdapterServiceClient, interval, windo
 func withSilentLogHeartbeat(t *testing.T) {
 	t.Helper()
 	orig := setLogHeartbeatRunner(func(context.Context, LogEventSender) {})
+	t.Cleanup(func() { setLogHeartbeatRunner(orig) })
+}
+
+// withPartialThenSilentLogHeartbeat swaps the heartbeat runner for one that
+// emits exactly the minimum-count floor the heartbeat case asserts
+// (window/(6*interval) beats at the declared interval, promptly after the
+// stream opens) and then stays silent for the rest of the window — a run that
+// bursts its beats and dies early, which every prompt/gap/count budget alone
+// accepts. Restored on cleanup.
+func withPartialThenSilentLogHeartbeat(t *testing.T, interval, window time.Duration) {
+	t.Helper()
+	minCount := max(1, int(window/(6*interval)))
+	orig := setLogHeartbeatRunner(func(ctx context.Context, sender LogEventSender) {
+		go func() {
+			tick := time.NewTicker(interval)
+			defer tick.Stop()
+			for i := 0; i < minCount; i++ {
+				select {
+				case <-ctx.Done():
+					return
+				case <-tick.C:
+					_ = sender.Send(&v2.LogEvent{Heartbeat: &v2.Heartbeat{}})
+				}
+			}
+		}()
+	})
 	t.Cleanup(func() { setLogHeartbeatRunner(orig) })
 }
 
@@ -671,7 +725,7 @@ func assertChunkFraming(t *testing.T, frags []*v2.ExecuteResult) {
 			}
 		}
 		if frag.GetChunk().GetSeq() != uint32(i) {
-			t.Fatalf("fragment %d arrived with Chunk.Seq %d (non-zero seq value 0 is invalid, must equal arrival index): %q", i, frag.GetChunk().GetSeq(), "")
+			t.Fatalf("fragment %d arrived with Chunk.Seq %d (non-zero seq value 0 is invalid, must equal arrival index)", i, frag.GetChunk().GetSeq())
 		}
 		if i < int(total)-1 && frag.GetChunk().GetFinal() {
 			t.Fatalf("fragment %d sets the final flag early", i)

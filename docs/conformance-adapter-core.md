@@ -35,7 +35,7 @@ the manifest-publishable type vocabulary
 | `handshake_and_info_round_trip_vs_spec` | A real go-plugin handshake (the test binary re-serves itself in a helper subprocess via `ServeSpec`), wire protocol version 2 negotiated, then a field-by-field Info round-trip vs the spec object — every declared surface survives the wire unchanged. |
 | `manifest_emit_parses_under_pinned_host_parser` | The `--emit-manifest` bytes parsed and validated by `internal/strictmanifest` (the pinned restatement of the host's manifest parser, host main tip 70959d34): schema_version, platform `os/arch` shapes, capabilities, schemas, secrets (`required: true`), permissions, and empty container image stays unset. |
 | `execute_chunks_reassemble_in_arrival_order` | Results larger than the spec's `MaxChunkBytes` are delivered as ordered chunks with correct framing (strict `seq == arrival index`, totals agree, `final` only on the last fragment), and join to the exact logical result. |
-| `log_heartbeat_liveness_and_cadence` | The SDK-owned log stream for an idle adapter session carries heartbeats for the full stream lifetime — first beat prompt after the stream opens, no silence gaps, minimum count met. The case's cadence budgets are relative multiples of the interval (prompt ≤ 8×, gap ≤ 6×, count ≥ window/6×interval), so a few missed ticks on a loaded shared runner do not flake the gate while a silent runner still fails. This is the case the documented mutation check kills (below). |
+| `log_heartbeat_liveness_and_cadence` | The SDK-owned log stream for an idle adapter session carries heartbeats for the full stream lifetime — first beat prompt after the stream opens, no silence gaps, minimum count met, and the beats span to the end of the window (last beat within one gap budget of stream end, so a runner that bursts its beats and dies mid-window fails). The case's cadence budgets are relative multiples of the interval (prompt ≤ 8×, gap ≤ 6×, count ≥ window/6×interval), so a few missed ticks on a loaded shared runner do not flake the gate while a silent or early-dying runner still fails. This is the case the documented mutation check kills (below). |
 | `concurrent_execute_spec_tier` / `concurrent_execute_tier2_reference` | `RunConcurrentExecuteConformance` — one session, N concurrent calls, per-call result correctness under the real gRPC bridge, both the declarative spec tier (unchunked and chunked) and the tier-2 reference `Service`. |
 | `secrets_resolve_once` | Session secrets travel the wire once, at `OpenSession`; per-call the spec tier delivers the wire `SecretInputs` verbatim — never re-resolved, never taken from the process env (an env fallback is armed before the calls and its value must never appear). The `Secrets` helper composition (`WithStepSecrets`, `Get`, `SpawnEnv`, undeclared-refusal) is asserted alongside. |
 | `permissions_per_wire` | Permissionless adapters answering `allow` with the matching request id (the `UnimplementedPermissions` default) vs an implemented deny — both answered on the bidi permissions stream. |
@@ -44,14 +44,21 @@ the manifest-publishable type vocabulary
 
 The acceptance gate for the profile itself is a mutation check: break a
 host-facing behavior the profile guards and prove the suite fails. The one
-documented mutation is the **log-stream heartbeat cadence**:
-`TestProfileMutationChecks` swaps the heartbeat runner for one that never
-sends and asserts `log_heartbeat_liveness_and_cadence` fails with
-`no log heartbeats`.
+documented mutation is the **log-stream heartbeat cadence**, mutated two
+ways in `TestProfileMutationChecks`:
+
+- a runner that never sends → `log_heartbeat_liveness_and_cadence` must fail
+  with `no log heartbeats`; and
+- a runner that bursts the minimum count (`window/6×interval` beats) promptly
+  and then goes silent for the rest of the window → every prompt/gap/count
+  budget above still passes, so the suite must fail on the end-of-window span
+  instead (`must stay alive for its full lifetime`).
 
 Why this mutation: the log stream's heartbeats are what feed the host's 90s
-stall detector for an idle adapter session. A regression that silences them
-means idle sessions are falsely declared crashed — and without the check the
-rest of the suite is blind to it, because an idle adapter emits no log lines
-at all. See `driveProfileHeartbeatWindow` in
+stall detector for an idle adapter session. A regression that silences them —
+entirely or partway through the session, the shape a half-torn-down adapter
+process takes — means idle sessions are falsely declared crashed — and
+without the check the rest of the suite is blind to it, because an idle
+adapter emits no log lines at all. See `driveProfileHeartbeatWindow` and
+`withPartialThenSilentLogHeartbeat` in
 [`adapterhost/profile_test.go`](../adapterhost/profile_test.go).
