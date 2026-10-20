@@ -1,6 +1,7 @@
 package adapterhost
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -29,17 +30,12 @@ func emitManifestRequested(args []string) bool {
 	return false
 }
 
-// emitManifest writes the adapter's static manifest (adapter.yaml) to w by
-// calling the adapter's own Info RPC and mapping the response into the schema
-// the host's manifest parser consumes. Output is JSON, which is valid YAML, so
-// it parses identically — this avoids a YAML dependency in the sdk module.
-func emitManifest(ctx context.Context, impl Service, w io.Writer) error {
-	if impl == nil {
-		return fmt.Errorf("adapterhost: nil adapter implementation")
-	}
-	info, err := impl.Info(ctx, &v2.InfoRequest{})
-	if err != nil {
-		return fmt.Errorf("adapterhost: Info for --emit-manifest: %w", err)
+// emitManifest writes the adapter's static manifest (adapter.yaml) to w from
+// the derived Info response. Output is JSON, which is valid YAML, so it
+// parses identically — this avoids a YAML dependency in the sdk module.
+func emitManifest(info *v2.InfoResponse, w io.Writer) error {
+	if info == nil {
+		return fmt.Errorf("adapterhost: --emit-manifest: no Info response to derive the manifest from")
 	}
 	doc := buildManifestDoc(info)
 	enc := json.NewEncoder(w)
@@ -48,6 +44,31 @@ func emitManifest(ctx context.Context, impl Service, w io.Writer) error {
 		return fmt.Errorf("adapterhost: encode manifest: %w", err)
 	}
 	return nil
+}
+
+// renderManifest renders the manifest document into the JSON bytes the
+// --emit-manifest path writes to stdout.
+func renderManifest(info *v2.InfoResponse) ([]byte, error) {
+	var buf bytes.Buffer
+	if err := emitManifest(info, &buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// emitManifestFromService renders the --emit-manifest bytes from the Service
+// tier's own Info RPC. The nil-impl guard keeps a mis-wired Serve(nil) on the
+// loud error path (exit 1, reason on stderr) instead of a nil-interface
+// method panic.
+func emitManifestFromService(ctx context.Context, impl Service) ([]byte, error) {
+	if impl == nil {
+		return nil, fmt.Errorf("adapterhost: nil adapter implementation")
+	}
+	info, err := impl.Info(ctx, &v2.InfoRequest{})
+	if err != nil {
+		return nil, fmt.Errorf("adapterhost: Info for --emit-manifest: %w", err)
+	}
+	return renderManifest(info)
 }
 
 // manifestDoc is the adapter.yaml document. The json tags equal the host
@@ -180,13 +201,22 @@ func nonNil(s []string) []string {
 }
 
 // runEmitManifestIfRequested handles the --emit-manifest flag at process start.
+// render sources the manifest bytes: the Service tier answers its own Info RPC
+// (emitManifestFromService), while the spec tier feeds deriveInfo(spec)
+// (ADR-0011 D3) so spec-object authors never implement Info. Any render error
+// (including a nil implementation) exits 1 loudly with the reason on stderr.
 // Returns true if the flag was handled (caller should exit).
-func runEmitManifestIfRequested(impl Service) bool {
+func runEmitManifestIfRequested(render func(context.Context) ([]byte, error)) bool {
 	if !emitManifestRequested(os.Args[1:]) {
 		return false
 	}
-	if err := emitManifest(context.Background(), impl, os.Stdout); err != nil {
+	b, err := render(context.Background())
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if _, err := os.Stdout.Write(b); err != nil {
+		fmt.Fprintf(os.Stderr, "adapterhost: --emit-manifest: write: %v\n", err)
 		os.Exit(1)
 	}
 	return true

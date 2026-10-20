@@ -718,19 +718,36 @@ func unimplementedVerb(method string) error {
 // host that spawned the binary already fails the step; a one-shot build
 // pipeline sees the exit code).
 //
-// When the process is invoked with --emit-manifest, the manifest is derived
-// from the spec through the same Info path (D3) and the process exits, just
-// as [Serve] does for the Service tier.
+// When the process is invoked with --emit-manifest, the manifest is fed from
+// deriveInfo(spec) — the exact function behind the Info RPC (ADR-0011 D3) —
+// and the process exits, just as [Serve] does for the Service tier.
 func ServeSpec(spec *Spec) {
 	svc, err := SpecService(spec)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	if runEmitManifestIfRequested(svc) {
+	// D3: the emitted manifest is fed from deriveInfo(spec) — the same
+	// single source the Info RPC serves — so spec-object authors never
+	// implement Info to be publishable.
+	if runEmitManifestIfRequested(func(context.Context) ([]byte, error) {
+		return emitManifestFromSpec(spec)
+	}) {
 		return
 	}
 	Serve(svc)
+}
+
+// emitManifestFromSpec renders the --emit-manifest bytes from deriveInfo(spec)
+// (ADR-0011 D3): no Info implementation is involved, and validation failure is
+// loud — a spec problem exits the process with the reason on stderr, exactly
+// like [ServeSpec]'s pre-emit validation.
+func emitManifestFromSpec(spec *Spec) ([]byte, error) {
+	info, err := deriveInfo(spec)
+	if err != nil {
+		return nil, err
+	}
+	return renderManifest(info)
 }
 
 // ServeSpecRemote dials the criteria host and serves a [Spec] over the

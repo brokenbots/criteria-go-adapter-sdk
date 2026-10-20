@@ -18,11 +18,15 @@ import (
 )
 
 // greeterSpec is the adapter's whole declaration: tier 1 is one object.
+// SourceURL and Platforms are the publish-critical metadata the host's
+// manifest parser requires (same contract the tier-2 noop example declares).
 func greeterSpec() *adapterhost.Spec {
 	return &adapterhost.Spec{
 		Name:        "greeter",
 		Version:     "0.1.0",
 		Description: "greets politely",
+		SourceURL:   "https://github.com/brokenbots/criteria-go-adapter-sdk",
+		Platforms:   []string{"linux/amd64", "linux/arm64", "darwin/arm64"},
 		InputSchema: adapterhost.Schema{
 			adapterhost.Field("name", adapterhost.SchemaTypeString, false, "who to greet"),
 		},
