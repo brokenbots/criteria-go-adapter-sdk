@@ -1,12 +1,16 @@
 // Package strictmanifest is test-support for the SDK's manifest emit path: a
-// strict mirror of the host's manifest parser (brokenbots/criteria
-// internal/adapter/manifest, mirrored from main tip 70959d34, accessed
-// 2026-10-20). The SDK cannot import the host's internal packages, so this
-// package re-states the parser's contract with unknown-field rejection and
-// the Validate rules, so emit tests can prove emitted manifests are
-// publishable — including the strict-parser behaviour KB-180d adds (unknown
-// fields rejected, per-key field validation). The KB-180d fixture set may
-// replace or extend this package once it lands.
+// strict restatement of the host's manifest parser (brokenbots/criteria
+// internal/adapter/manifest, main tip 70959d34, accessed 2026-10-20). The SDK
+// cannot import the host's internal packages, so this package re-states the
+// parser's contract (the manifest structure, the JSON-as-YAML-subset input —
+// main parses YAML with a plain yaml.Unmarshal today — and the Validate
+// rules) so emit tests can prove emitted manifests are publishable.
+//
+// The strictness is deliberately forward-looking, not mirrored from main:
+// unknown-field rejection and the strict parse coupling are the behaviour
+// KB-180d adds to the host parser, adopted here ahead of that card; the
+// structural parsing and validation rules reflect main's current behaviour.
+// The KB-180d fixture set may replace or extend this package once it lands.
 package strictmanifest
 
 import (
@@ -74,8 +78,10 @@ type ContainerImage struct {
 // Parse decodes a manifest strictly: unknown keys are rejected (the KB-180d
 // strict behaviour) and the document structure is validated. The mirror is
 // deliberately stricter than the host on semver (full MAJOR.MINOR.PATCH, no
-// prerelease/build suffixes) and does not verify container digests (the SDK
-// never emits one; the host checks them with go-digest).
+// prerelease/build suffixes) and does not verify container digests (the
+// emitter always sends "digest": "" for a container image — see
+// containerImageDoc.Digest — which is harmless to the host: it checks
+// digests only when non-empty, with go-digest).
 func Parse(data []byte) (*Manifest, error) {
 	var m Manifest
 	dec := json.NewDecoder(bytes.NewReader(data))
@@ -116,7 +122,11 @@ func (m *Manifest) Validate() error {
 		if !osRe.MatchString(p.OS) {
 			return fmt.Errorf("manifest: platform os %q invalid", p.OS)
 		}
-		if p.Arch != "" && !archRe.MatchString(p.Arch) {
+		// The host's validatePlatforms checks os and arch unconditionally, so
+		// it rejects the {"os":…,"arch":""} shape an os-only spec platform
+		// string maps to — the mirror must reject it too; nothing skips the
+		// check for empty arch.
+		if !archRe.MatchString(p.Arch) {
 			return fmt.Errorf("manifest: platform arch %q invalid", p.Arch)
 		}
 	}

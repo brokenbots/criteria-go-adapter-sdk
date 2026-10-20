@@ -57,6 +57,7 @@ func TestValidateRejections(t *testing.T) {
 		"no platforms":         func(m *Manifest) { m.Platforms = nil },
 		"bad platform os":      func(m *Manifest) { m.Platforms[0].OS = "Linux" },
 		"bad platform arch":    func(m *Manifest) { m.Platforms[0].Arch = "amd-64" },
+		"platform arch empty":  func(m *Manifest) { m.Platforms[0].Arch = "" },
 		"protocol version 3":   func(m *Manifest) { m.SDKProtocolVersion = 3 },
 		"field type bool":      func(m *Manifest) { setFieldType(m, "bool") },
 		"field type list_str":  func(m *Manifest) { setFieldType(m, "list_string") },
