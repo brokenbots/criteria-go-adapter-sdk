@@ -78,10 +78,10 @@ type ContainerImage struct {
 // Parse decodes a manifest strictly: unknown keys are rejected (the KB-180d
 // strict behaviour) and the document structure is validated. The mirror is
 // deliberately stricter than the host on semver (full MAJOR.MINOR.PATCH, no
-// prerelease/build suffixes) and does not verify container digests (the
-// emitter always sends "digest": "" for a container image — see
-// containerImageDoc.Digest — which is harmless to the host: it checks
-// digests only when non-empty, with go-digest).
+// prerelease/build suffixes) and does not verify container digests (the emit
+// path emits "digest": "" whenever a container image is set,
+// adapterhost.containerImageDoc.Digest lacks omitempty; that is harmless to
+// the host, which validates the digest only when non-empty with go-digest).
 func Parse(data []byte) (*Manifest, error) {
 	var m Manifest
 	dec := json.NewDecoder(bytes.NewReader(data))
@@ -122,10 +122,10 @@ func (m *Manifest) Validate() error {
 		if !osRe.MatchString(p.OS) {
 			return fmt.Errorf("manifest: platform os %q invalid", p.OS)
 		}
-		// The host's validatePlatforms checks os and arch unconditionally, so
-		// it rejects the {"os":…,"arch":""} shape an os-only spec platform
-		// string maps to — the mirror must reject it too; nothing skips the
-		// check for empty arch.
+		// The host's validatePlatforms checks os and arch unconditionally —
+		// including the {"os":…,"arch":""} shape an os-only spec platform
+		// string maps to — so the mirror must not gate the arch check on
+		// non-empty arch.
 		if !archRe.MatchString(p.Arch) {
 			return fmt.Errorf("manifest: platform arch %q invalid", p.Arch)
 		}
