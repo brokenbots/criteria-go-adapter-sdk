@@ -1,7 +1,7 @@
 // Package strictmanifest is test-support for the SDK's manifest emit path: a
 // strict mirror of the host's manifest parser (brokenbots/criteria
-// internal/adapter/manifest, mirrored from main @ 2026-10-20 / proto pin
-// 3a3aa0c1). The SDK cannot import the host's internal packages, so this
+// internal/adapter/manifest, mirrored from main tip 70959d34, accessed
+// 2026-10-20). The SDK cannot import the host's internal packages, so this
 // package re-states the parser's contract with unknown-field rejection and
 // the Validate rules, so emit tests can prove emitted manifests are
 // publishable — including the strict-parser behaviour KB-180d adds (unknown

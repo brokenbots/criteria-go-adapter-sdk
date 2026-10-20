@@ -125,7 +125,6 @@ func TestEmitManifest_NilInfoIsLoud(t *testing.T) {
 	}
 }
 
-// TestEmitManifestRequested
 func TestEmitManifestRequested(t *testing.T) {
 	if !emitManifestRequested([]string{"--emit-manifest"}) {
 		t.Error("expected true when flag present")

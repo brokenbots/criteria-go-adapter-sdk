@@ -718,9 +718,9 @@ func unimplementedVerb(method string) error {
 // host that spawned the binary already fails the step; a one-shot build
 // pipeline sees the exit code).
 //
-// When the process is invoked with --emit-manifest, the manifest is derived
-// from the spec through the same Info path (D3) and the process exits, just
-// as [Serve] does for the Service tier.
+// When the process is invoked with --emit-manifest, the manifest is fed from
+// deriveInfo(spec) — the exact function behind the Info RPC (ADR-0011 D3) —
+// and the process exits, just as [Serve] does for the Service tier.
 func ServeSpec(spec *Spec) {
 	svc, err := SpecService(spec)
 	if err != nil {
