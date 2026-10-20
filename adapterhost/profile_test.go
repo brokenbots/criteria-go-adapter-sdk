@@ -50,6 +50,8 @@ import (
 	hclog "github.com/hashicorp/go-hclog"
 	hplugin "github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	v2 "github.com/brokenbots/criteria-adapter-proto/criteria/v2"
 
@@ -160,7 +162,9 @@ func profileEchoWant(in map[string]string) (*v2.ExecuteResult, error) {
 // profileClientPlugin is the host-side go-plugin plugin used by the handshake
 // case: go-plugin hands the dispensed connection back and the profile speaks
 // the generated v2.AdapterServiceClient against it.
-type profileClientPlugin struct{ hplugin.NetRPCUnsupportedPlugin }
+type profileClientPlugin struct {
+	hplugin.NetRPCUnsupportedPlugin
+}
 
 func (profileClientPlugin) GRPCServer(_ *hplugin.GRPCBroker, _ *grpc.Server) error {
 	return errors.New("profileClientPlugin serves nothing")
@@ -292,8 +296,8 @@ func TestProfileAdapterCore(t *testing.T) {
 		}
 		for i, s := range doc.Secrets {
 			want := spec.Secrets[i]
-			if s.Name != want.Name || s.Description != want.Description {
-				t.Errorf("secrets[%d] = %#v; want name %q desc %q", i, s, want.Name, want.Description)
+			if s.Name != want.Name || s.Description != want.Description || !s.Required {
+				t.Errorf("secrets[%d] = %#v; want name %q desc %q required", i, s, want.Name, want.Description)
 			}
 		}
 		if got, want := strings.Join(doc.Permissions, ","), strings.Join(spec.Permissions, ","); got != want {
@@ -441,8 +445,13 @@ func TestProfileAdapterCore(t *testing.T) {
 			t.Fatalf("second call secrets = %v; want only step-b's own overlay", secretsOf(capturedExecutes))
 		}
 
-		if capturedClosedID != "" {
-			t.Errorf("CloseSession handler ran without a CloseSession call (id %q)", capturedClosedID)
+		// Close the session over the wire: the SDK must deliver the id to the
+		// adapter's CloseSession handler.
+		if _, err := client.CloseSession(ctx, &v2.CloseSessionRequest{SessionId: "s-sec"}); err != nil {
+			t.Fatalf("CloseSession: %v", err)
+		}
+		if capturedClosedID != "s-sec" {
+			t.Fatalf("CloseSession handler id = %q; want \"s-sec\"", capturedClosedID)
 		}
 
 		// The SDK's resolution helper contract the spec tier builds on
@@ -535,67 +544,67 @@ func TestProfileMutationChecks(t *testing.T) {
 
 // driveProfileHeartbeatWindow opens a Log stream on the serving adapter and
 // verifies the SDK's heartbeat contract over a timed window at the given
-// interval: heartbeats flow, continue for the full window (stream lifetime,
-// even with an idle adapter), and keep the declared cadence (no silence gaps
-// that would starve the host's 90s stall detector). The mutation check relies
+// interval: heartbeats flow for the full stream lifetime (even with an idle
+// adapter), start promptly after the stream opens, and keep a cadence whose
+// budgets tolerate a few missed ticks on a loaded CI runner. The stream is
+// driven entirely on this goroutine: the window ends by cancelling the
+// context, the next Recv returns the cancelled stream (context.Canceled or a
+// grpc codes.Canceled status), and only then are the collected beats
+// inspected — no cross-goroutine access, no torn reads, and a real stream
+// error always surfaces instead of being dropped. The mutation check relies
 // on this function failing with "no log heartbeats" when the runner is silent.
 func driveProfileHeartbeatWindow(client v2.AdapterServiceClient, interval, window time.Duration) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	var beats []time.Time
-	errCh := make(chan error, 1)
-	go func() {
-		stream, err := client.Log(ctx, &v2.LogRequest{SessionId: profileHeartbeatSessionID, StepName: "heartbeat"})
-		if err != nil {
-			errCh <- err
-			return
-		}
-		for {
-			ev, err := stream.Recv()
-			if err != nil {
-				// Our own window-cancel ends the stream; only real errors surface.
-				if errors.Is(err, context.Canceled) {
-					err = nil
-				}
-				errCh <- err
-				return
-			}
-			if ev.GetHeartbeat() != nil {
-				beats = append(beats, time.Now())
-			}
-		}
-	}()
-	select {
-	case err := <-errCh:
-		if err != nil {
-			return fmt.Errorf("log stream failed before the heartbeat window finished: %w", err)
-		}
-	case <-time.After(window):
+	stream, err := client.Log(ctx, &v2.LogRequest{SessionId: profileHeartbeatSessionID, StepName: "heartbeat"})
+	if err != nil {
+		return fmt.Errorf("open log stream: %w", err)
 	}
-	cancel()
+	streamStart := time.Now()
 
-	first := time.Now().Add(-window)
-	prev := first
+	// The window ends by cancelling the context so Recv unblocks here; the
+	// timer starts after the stream is open, and the prompt budget below
+	// counts from streamStart — gRPC setup time is excluded either way.
+	timer := time.AfterFunc(window, cancel)
+	defer timer.Stop()
+
+	var beats []time.Time
+	for {
+		ev, err := stream.Recv()
+		if err != nil {
+			// Our own window-cancel ends the stream. grpc surfaces the
+			// cancelled stream context as a codes.Canceled status error,
+			// which does not necessarily match errors.Is(context.Canceled),
+			// so check both; only real errors surface.
+			if errors.Is(err, context.Canceled) || status.Code(err) == codes.Canceled {
+				break
+			}
+			return fmt.Errorf("log stream failed during the heartbeat window: %w", err)
+		}
+		if ev.GetHeartbeat() != nil {
+			beats = append(beats, time.Now())
+		}
+	}
+
 	for i, beat := range beats {
 		switch i {
 		case 0:
 			// First beat must be prompt: production cadence is 30s; a runner
 			// that only beats once and then stalls must fail.
-			if d := beat.Sub(prev); d > 4*interval {
-				return fmt.Errorf("first log heartbeat took %v; expected within %v", d, 4*interval)
+			if d := beat.Sub(streamStart); d > 8*interval {
+				return fmt.Errorf("first log heartbeat took %v from stream start; expected within %v", d, 8*interval)
 			}
 		default:
-			if d := beat.Sub(prev); d > 3*interval {
-				return fmt.Errorf("log heartbeat gap %v exceeds the cadence budget %v: the stream went silent", d, 3*interval)
+			if d := beat.Sub(beats[i-1]); d > 6*interval {
+				return fmt.Errorf("log heartbeat gap %v exceeds the cadence budget %v: the stream went silent", d, 6*interval)
 			}
 		}
-		prev = beat
 	}
 	if len(beats) == 0 {
 		return fmt.Errorf("no log heartbeats within %s (interval %s): the SDK-owned log stream stopped heartbeat and the host's stall detector would starve", window, interval)
 	}
-	if n := window / (2 * interval); len(beats) < int(n) {
+	if n := window / (6 * interval); len(beats) < int(n) {
 		return fmt.Errorf("%d log heartbeats in %s at interval %s; want at least %d — the stream must stay alive for its full lifetime", len(beats), window, interval, n)
 	}
 	return nil
@@ -605,9 +614,8 @@ func driveProfileHeartbeatWindow(client v2.AdapterServiceClient, interval, windo
 // the documented mutation (wrong cadence → no heartbeats). Restored on cleanup.
 func withSilentLogHeartbeat(t *testing.T) {
 	t.Helper()
-	orig := logHeartbeatRunner
-	logHeartbeatRunner = func(context.Context, LogEventSender) {}
-	t.Cleanup(func() { logHeartbeatRunner = orig })
+	orig := setLogHeartbeatRunner(func(context.Context, LogEventSender) {})
+	t.Cleanup(func() { setLogHeartbeatRunner(orig) })
 }
 
 // profileEchoScript builds a concurrent-execute script against

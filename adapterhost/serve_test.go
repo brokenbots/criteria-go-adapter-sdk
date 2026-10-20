@@ -113,15 +113,14 @@ func (logFixtureService) CloseSession(context.Context, *v2.CloseSessionRequest) 
 // test ticker and restores it on test cleanup.
 func withFastLogHeartbeat(t *testing.T, interval time.Duration) {
 	t.Helper()
-	orig := logHeartbeatRunner
-	logHeartbeatRunner = func(ctx context.Context, sender LogEventSender) {
+	orig := setLogHeartbeatRunner(func(ctx context.Context, sender LogEventSender) {
 		go func() {
 			_ = v2.RunHeartbeatWithInterval(ctx, "log", func(hb *v2.Heartbeat) error {
 				return sender.Send(&v2.LogEvent{Heartbeat: hb})
 			}, interval)
 		}()
-	}
-	t.Cleanup(func() { logHeartbeatRunner = orig })
+	})
+	t.Cleanup(func() { setLogHeartbeatRunner(orig) })
 }
 
 // startLogTestServer starts a gRPC server hosting grpcAdapterServer for svc
