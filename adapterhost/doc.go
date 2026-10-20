@@ -103,7 +103,8 @@
 //
 // This package is v0. The [Spec] declarative surface, the [Service]
 // interface, and the v2 wire protocol are the stable surface for adapter
-// authors; breaking changes follow the SDK bump policy in CONTRIBUTING.md.
+// authors; breaking changes follow the SDK bump policy in
+// docs/dependency-policy.md.
 //
 // # CHANGELOG forward-pointer
 //
