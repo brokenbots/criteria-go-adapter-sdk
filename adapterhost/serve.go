@@ -31,8 +31,8 @@ var logHeartbeatRunner = func(ctx context.Context, sender LogEventSender) {
 // to stdout and exits, instead of starting the plugin server. The build
 // pipeline and `criteria adapter publish` use this to extract the manifest.
 func Serve(impl Service) {
-	if runEmitManifestIfRequested(func(ctx context.Context) (*v2.InfoResponse, error) {
-		return impl.Info(ctx, &v2.InfoRequest{})
+	if runEmitManifestIfRequested(func(ctx context.Context) ([]byte, error) {
+		return emitManifestFromService(ctx, impl)
 	}) {
 		return
 	}

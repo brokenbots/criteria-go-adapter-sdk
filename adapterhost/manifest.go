@@ -1,6 +1,7 @@
 package adapterhost
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -43,6 +44,31 @@ func emitManifest(info *v2.InfoResponse, w io.Writer) error {
 		return fmt.Errorf("adapterhost: encode manifest: %w", err)
 	}
 	return nil
+}
+
+// renderManifest renders the manifest document into the JSON bytes the
+// --emit-manifest path writes to stdout.
+func renderManifest(info *v2.InfoResponse) ([]byte, error) {
+	var buf bytes.Buffer
+	if err := emitManifest(info, &buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// emitManifestFromService renders the --emit-manifest bytes from the Service
+// tier's own Info RPC. The nil-impl guard keeps a mis-wired Serve(nil) on the
+// loud error path (exit 1, reason on stderr) instead of a nil-interface
+// method panic.
+func emitManifestFromService(ctx context.Context, impl Service) ([]byte, error) {
+	if impl == nil {
+		return nil, fmt.Errorf("adapterhost: nil adapter implementation")
+	}
+	info, err := impl.Info(ctx, &v2.InfoRequest{})
+	if err != nil {
+		return nil, fmt.Errorf("adapterhost: Info for --emit-manifest: %w", err)
+	}
+	return renderManifest(info)
 }
 
 // manifestDoc is the adapter.yaml document. The json tags equal the host
@@ -175,21 +201,22 @@ func nonNil(s []string) []string {
 }
 
 // runEmitManifestIfRequested handles the --emit-manifest flag at process start.
-// obtain sources the derived InfoResponse the manifest is fed from: the
-// Service tier answers its own Info RPC, while the spec tier feeds
-// deriveInfo(spec) (ADR-0011 D3) so spec-object authors never implement Info.
+// render sources the manifest bytes: the Service tier answers its own Info RPC
+// (emitManifestFromService), while the spec tier feeds deriveInfo(spec)
+// (ADR-0011 D3) so spec-object authors never implement Info. Any render error
+// (including a nil implementation) exits 1 loudly with the reason on stderr.
 // Returns true if the flag was handled (caller should exit).
-func runEmitManifestIfRequested(obtain func(context.Context) (*v2.InfoResponse, error)) bool {
+func runEmitManifestIfRequested(render func(context.Context) ([]byte, error)) bool {
 	if !emitManifestRequested(os.Args[1:]) {
 		return false
 	}
-	info, err := obtain(context.Background())
+	b, err := render(context.Background())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	if err := emitManifest(info, os.Stdout); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+	if _, err := os.Stdout.Write(b); err != nil {
+		fmt.Fprintf(os.Stderr, "adapterhost: --emit-manifest: write: %v\n", err)
 		os.Exit(1)
 	}
 	return true

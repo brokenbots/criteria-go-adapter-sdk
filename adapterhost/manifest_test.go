@@ -125,6 +125,41 @@ func TestEmitManifest_NilInfoIsLoud(t *testing.T) {
 	}
 }
 
+// TestEmitManifestFromService_NilImplIsLoud pins the nil guard the old
+// --emit-manifest path had: a mis-wired Serve(nil) must land on the loud
+// error path (exit 1, reason on stderr) instead of panicking on the nil
+// interface method call the render closure would otherwise make.
+func TestEmitManifestFromService_NilImplIsLoud(t *testing.T) {
+	_, err := emitManifestFromService(context.Background(), nil)
+	if err == nil {
+		t.Error("emitManifestFromService(nil) must fail loudly, not panic")
+	} else if err.Error() != "adapterhost: nil adapter implementation" {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// TestEmitManifestFromService_ProducesValidJSON exercises the happy path of
+// the Service-tier render the new Serve closure feeds: the manifest bytes
+// come from the Service's own Info RPC and are decodable as JSON (so, as
+// YAML).
+func TestEmitManifestFromService_ProducesValidJSON(t *testing.T) {
+	svc, err := SpecService(greeterEmitSpec())
+	if err != nil {
+		t.Fatalf("SpecService: %v", err)
+	}
+	b, err := emitManifestFromService(context.Background(), svc)
+	if err != nil {
+		t.Fatalf("emitManifestFromService: %v", err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(b, &parsed); err != nil {
+		t.Fatalf("emitted manifest is not valid JSON (so not valid YAML): %v", err)
+	}
+	if parsed["name"] != "greeter" || parsed["schema_version"].(float64) != 1 {
+		t.Errorf("unexpected manifest: %v", parsed)
+	}
+}
+
 func TestEmitManifestRequested(t *testing.T) {
 	if !emitManifestRequested([]string{"--emit-manifest"}) {
 		t.Error("expected true when flag present")
