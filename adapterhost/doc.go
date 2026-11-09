@@ -68,6 +68,28 @@
 // the same bridge as [Serve] (see [SpecService]) — one code path, two tiers
 // (D1).
 //
+// # Outcome contracts
+//
+// Since criteria-adapter-proto v0.7.0 the host can pin per-outcome contracts
+// onto every Execute (contract mode): each allowed outcome carries a payload
+// schema, a require-comment flag, and a fallback marker. The SDK surfaces two
+// things around those contracts. First the hand-off: [Spec.Execute] handlers
+// receive the step's contracts and the post-rejection repair context as the
+// plain mirrors [ExecuteInput.OutcomeContracts] and [ExecuteInput.Rejection];
+// a tier-2 [Service] reads the typed wire values on the [Service.Execute]
+// request directly. Second the helpers: [ValidateOutcomeResult] (plus its
+// spec-tier twin [OutcomeContracts.ValidateResult]) wrap the pinned proto
+// evaluator so an adapter validates its candidate result BEFORE pushing it —
+// a contract-losing result fails one round-trip earlier; [ContractFor] does
+// the matched-schema lookup; [NewExecutionRejection] frames the repair
+// context exactly like the host. An adapter that wants to negotiate the mode
+// declares [CapabilityOutcomeContracts] in its capabilities. The host's
+// post-finalize validation still backstops results an adapter did not
+// pre-flight; results are pushed verbatim either way. The shared conformance
+// vectors pin all of this byte-for-byte, so SDK enforcement cannot drift
+// from the pinned evaluator at the pinned release; see
+// docs/outcome-contracts.md.
+//
 // # Remote entrypoint
 //
 // Adapters that phone home to a criteria host (instead of being spawned by
