@@ -1,6 +1,6 @@
 module example.com/criteria-adapter-greeter
 
-go 1.26.9
+go 1.26.10
 
 // This in-repo example builds against the LOCAL SDK tree (replace below) so
 // `go test ./...` from the repository root exercises the same code an external
