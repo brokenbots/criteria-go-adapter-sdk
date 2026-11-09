@@ -32,6 +32,17 @@ type Service interface {
 	// It must send exactly one [v2.ExecuteResult] inside a [v2.ExecuteEvent] before
 	// returning nil, or return a non-nil error. Log lines are NOT sent here;
 	// they flow through [Log].
+	//
+	// The request may carry the step's outcome contracts
+	// (req.GetOutcomeContracts, contract mode when non-empty) and a
+	// host-framed rejection repair context (req.GetRejection, non-nil on
+	// the next Execute after a contract-invalid result). Tier-2
+	// implementations enforce their result pre-flight with
+	// [ValidateOutcomeResult] (pushing only a nil-issue result), match
+	// candidates with [ContractFor], and mirror the host's repair framing
+	// with [NewExecutionRejection]; tier-1 [Spec.Execute] handlers receive
+	// the same values as plain [ExecuteInput] mirrors. The host's
+	// post-finalize validation still backstops every result.
 	Execute(context.Context, *v2.ExecuteRequest, ExecuteEventSender) error
 	// Log streams log lines for the step to the host via [LogEventSender].
 	// The host drives this concurrently with [Execute].

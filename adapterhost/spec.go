@@ -138,6 +138,24 @@ type ExecuteInput struct {
 	// Zero means the host declared none; enforcement stays the adapter's
 	// policy.
 	Timeout time.Duration
+	// OutcomeContracts carries the step's per-outcome contracts when the
+	// host drives the step in contract mode (non-empty). In contract mode
+	// the host runs the pinned evaluator on the finalized result after the
+	// handler returns: a result that fails its contract is rejected and
+	// the step re-executes with [ExecuteInput.Rejection] set. Handlers
+	// that want to catch the failure one round-trip earlier pre-flight
+	// their candidate result with [OutcomeContracts.ValidateResult] and
+	// return an error instead of a contract-losing result. Empty means
+	// legacy mode: the host enforces name-only allowed_outcomes after
+	// finalize, and results ride the wire untouched.
+	OutcomeContracts OutcomeContracts
+	// Rejection is non-nil in repair mode: the prior Execute of this step
+	// finalized a contract-invalid result, and the host re-executed it
+	// with this rejection context. Issues quotes the prior rejection's
+	// pinned issue text (newline-joined); adapters surface it to the model
+	// for repair and must not parse it. Attempt is the step's 1-based
+	// repair counter. Nil means the step is not a repair re-execution.
+	Rejection *Rejection
 }
 
 // ExecuteResult is the step finalization a [Spec.Execute] handler returns.
@@ -525,12 +543,14 @@ func (s *specService) OpenSession(ctx context.Context, req *v2.OpenSessionReques
 // the host reassembles them in arrival order.
 func (s *specService) Execute(ctx context.Context, req *v2.ExecuteRequest, sender ExecuteEventSender) error {
 	in := &ExecuteInput{
-		SessionID:       req.GetSessionId(),
-		StepName:        req.GetStepName(),
-		Input:           req.GetInput(),
-		Secrets:         req.GetSecretInputs(),
-		AllowedOutcomes: req.GetAllowedOutcomes(),
-		Timeout:         time.Duration(req.GetTimeoutMs()) * time.Millisecond,
+		SessionID:        req.GetSessionId(),
+		StepName:         req.GetStepName(),
+		Input:            req.GetInput(),
+		Secrets:          req.GetSecretInputs(),
+		AllowedOutcomes:  req.GetAllowedOutcomes(),
+		Timeout:          time.Duration(req.GetTimeoutMs()) * time.Millisecond,
+		OutcomeContracts: outcomeContractsFromWire(req.GetOutcomeContracts()),
+		Rejection:        rejectionFromWire(req.GetRejection()),
 	}
 	res, err := s.spec.Execute(ctx, in)
 	if err != nil {

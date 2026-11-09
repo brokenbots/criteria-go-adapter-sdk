@@ -1,6 +1,6 @@
 module github.com/brokenbots/criteria-go-adapter-sdk
 
-go 1.26.9
+go 1.26.10
 
 require (
 	github.com/brokenbots/criteria-adapter-proto v0.7.1-0.20261019051615-3a3aa0c1cb85
